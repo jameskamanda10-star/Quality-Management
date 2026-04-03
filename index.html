@@ -560,34 +560,13 @@
   }
 
   @media (max-width: 600px) {
-    /* Header: stack logo + text on one row, hide right side details */
-    header { padding: 0 12px; }
-    .header-inner { gap: 10px; padding: 10px 0; flex-wrap: nowrap; align-items: center; }
-    .logo-img { width: 40px; height: 40px; flex-shrink: 0; }
-    .header-divider { display: none; }
-    .header-text { flex: 1; min-width: 0; }
-    .header-org { font-size: 13px; letter-spacing: 1.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-    .header-dept { font-size: 9px; letter-spacing: 1px; margin-top: 3px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-    .header-right { flex-direction: row; align-items: center; gap: 6px; flex-shrink: 0; }
-    .header-right .live-badge { padding: 3px 8px; font-size: 10px; }
-    .header-clock { display: none; }
-    /* Hide reset button text, show only icon */
-    .header-right button[onclick*="clearStorage"] { padding: 3px 8px; font-size: 10px; }
-    /* Stats: 2 columns on mobile */
+    .header-inner { gap: 12px; }
+    .header-org { font-size: 16px; letter-spacing: 2px; }
     .stats-grid { grid-template-columns: repeat(2, 1fr); }
-    /* Unit tabs */
     .unit-tab .tab-sub { display: none; }
-    .unit-tabs-wrap { top: 64px; }
-    /* Toolbar */
+    .unit-tabs-wrap { top: 88px; }
     .toolbar { flex-direction: column; align-items: stretch; }
     .search-box { max-width: 100%; }
-  }
-
-  @media (max-width: 400px) {
-    .header-org { font-size: 11px; letter-spacing: 1px; }
-    .logo-img { width: 34px; height: 34px; }
-    .header-right .live-badge { font-size: 9px; padding: 2px 6px; }
-    .header-dept { display: none; }
   }
 
   /* ── CHECKLIST BUTTON ── */
@@ -1150,42 +1129,6 @@
     max-width:180px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; display:inline-block;
   }
   .project-name-link:hover { color:#0d4f7a; }
-
-
-  /* ── NOTIFICATION BANNER ── */
-  .notif-banner {
-    position: fixed; top: 70px; right: 16px; z-index: 600;
-    background: linear-gradient(135deg, #0a0f18 0%, #162030 100%);
-    border: 1px solid var(--gold);
-    border-radius: 10px; padding: 12px 16px;
-    display: flex; align-items: flex-start; gap: 12px;
-    box-shadow: 0 8px 32px rgba(0,0,0,0.5);
-    max-width: 320px; min-width: 260px;
-    transform: translateX(120%);
-    transition: transform 0.35s cubic-bezier(0.175, 0.885, 0.32, 1.275);
-    cursor: pointer;
-  }
-  .notif-banner.show { transform: translateX(0); }
-  .notif-icon {
-    width: 36px; height: 36px; border-radius: 8px;
-    background: rgba(245,196,0,0.15); border: 1px solid rgba(245,196,0,0.3);
-    display: grid; place-items: center; font-size: 18px; flex-shrink: 0;
-  }
-  .notif-content { flex: 1; min-width: 0; }
-  .notif-title { font-family: 'Bebas Neue', sans-serif; font-size: 13px; letter-spacing: 1.5px; color: var(--gold); margin-bottom: 3px; }
-  .notif-body { font-size: 12px; color: #c8d4d8; line-height: 1.4; word-break: break-word; }
-  .notif-time { font-family: 'DM Mono', monospace; font-size: 9px; color: #556677; margin-top: 4px; }
-  .notif-close {
-    width: 20px; height: 20px; border-radius: 50%;
-    border: 1px solid #2e3f55; background: transparent;
-    color: #556677; cursor: pointer; font-size: 11px;
-    display: grid; place-items: center; flex-shrink: 0;
-    transition: all 0.15s;
-  }
-  .notif-close:hover { color: #f85149; border-color: #f85149; }
-  @media (max-width: 600px) {
-    .notif-banner { top: auto; bottom: 80px; right: 10px; left: 10px; max-width: 100%; min-width: 0; }
-  }
 
 </style>
 </style>
@@ -1970,7 +1913,7 @@ function openModal(u, idx=null) {
     html += field('approval', u===1 ? 'Commission Date' : 'Date of Approval','date',r?.approval||'','');
     if (u === 1) html += fselect('status','Commission Status',['Pending','In Review','Commissioned','Rejected'],r?.status||'Pending');
     html += field('progress','Progress Level (%)','number',r?.progress??'','0–100');
-    html += `<div class="form-group full"><label>Approval/Inspector Comment</label><textarea id="f_comment" placeholder="Approval/Inspector remarks…">${r?.comment||''}</textarea></div>`;
+    html += `<div class="form-group full"><label>Approval Comment</label><textarea id="f_comment" placeholder="Approval remarks…">${r?.comment||''}</textarea></div>`;
   } else {
     html += field('title','Spec / Standard Title','text',r?.title||'','Full title of document');
     html += field('docNo','Document #','text',r?.docNo||'','TSS-LEC-000');
@@ -2072,9 +2015,6 @@ function saveRecord() {
   closeModal();
   saveToStorage();
   renderAll(u);
-  // Show notification badge — other devices get notified via Realtime
-  const action = editIdx !== null ? 'updated' : 'added';
-  notifyAll('📋', 'Project ' + (action==='added'?'Added':'Updated'), r.project + ' (' + r.ref + ') was ' + action);
 }
 
 function delRecord(u,idx) {
@@ -2239,8 +2179,6 @@ async function pushToCloud() {
     lastVersion = ts;
     saveLocal();
     setSyncStatus('synced');
-    // Notify other devices (they receive via Realtime; this is our own confirmation banner)
-    // We don't show banner for our own save — Realtime listener handles others
   } catch(e) {
     const msg = e.message || '';
     const hint = msg.includes('checklists') || msg.includes('42703')
@@ -2332,7 +2270,6 @@ function startPolling() {
         renderAll(activeUnit || 0);
         setSyncStatus('synced');
         showToast('🔄 Data updated from another device');
-        notifyAll('🔄', 'Dashboard Updated', 'A staff member made changes to the dashboard');
       }
     } catch(e) { /* silent poll error */ }
   }, POLL_MS);
@@ -2360,11 +2297,7 @@ document.addEventListener('visibilitychange', () => {
   }
 });
 
-window.addEventListener('online',  () => { if (isConfigured()) { loadFromStorage().then(() => {
-  startPolling();
-  startRealtime();
-  requestNotifPermission();
-}); } });
+window.addEventListener('online',  () => { if (isConfigured()) { loadFromStorage().then(() => startPolling()); } });
 window.addEventListener('offline', () => setSyncStatus('offline'));
 
 // ── Status badge ──
@@ -2394,154 +2327,6 @@ function clearStorage() {
   localStorage.removeItem(LOCAL_KEY);
   location.reload();
 }
-
-
-// ══════════════════════════════════════════════
-//  REAL-TIME NOTIFICATIONS (Supabase Realtime + Browser Notify)
-// ══════════════════════════════════════════════
-
-let notifTimer = null;
-let notifPermission = 'default';
-let realtimeClient = null;
-let realtimeChannel = null;
-
-// ── Request browser notification permission ──
-async function requestNotifPermission() {
-  if (!('Notification' in window)) return;
-  if (Notification.permission === 'granted') { notifPermission = 'granted'; return; }
-  if (Notification.permission !== 'denied') {
-    const perm = await Notification.requestPermission();
-    notifPermission = perm;
-  }
-}
-
-// ── Show in-app banner ──
-function showNotifBanner(icon, title, body) {
-  const banner  = document.getElementById('notifBanner');
-  const iconEl  = document.getElementById('notifIcon');
-  const titleEl = document.getElementById('notifTitle');
-  const bodyEl  = document.getElementById('notifBody');
-  const timeEl  = document.getElementById('notifTime');
-  if (!banner) return;
-  iconEl.textContent  = icon;
-  titleEl.textContent = title;
-  bodyEl.textContent  = body;
-  timeEl.textContent  = new Date().toLocaleTimeString('en-GB', {hour:'2-digit',minute:'2-digit'});
-  banner.classList.add('show');
-  clearTimeout(notifTimer);
-  notifTimer = setTimeout(dismissNotif, 7000);
-}
-
-function dismissNotif() {
-  const banner = document.getElementById('notifBanner');
-  if (banner) banner.classList.remove('show');
-  clearTimeout(notifTimer);
-}
-
-// ── Show native browser/phone notification ──
-function showNativeNotif(title, body) {
-  if (notifPermission !== 'granted') return;
-  try {
-    const n = new Notification(title, {
-      body,
-      icon: document.getElementById('lec-logo')?.src || '',
-      badge: document.getElementById('lec-logo')?.src || '',
-      tag: 'lec-qms',
-      renotify: true,
-    });
-    n.onclick = () => { window.focus(); n.close(); };
-    setTimeout(() => n.close(), 8000);
-  } catch(e) { /* some browsers block Notification */ }
-}
-
-// ── Combined notify ──
-function notifyAll(icon, title, body) {
-  showNotifBanner(icon, title, body);
-  showNativeNotif('LEC QMS — ' + title, body);
-}
-
-// ── Load Supabase Realtime SDK and subscribe ──
-async function startRealtime() {
-  if (!isConfigured()) return;
-  // Load the Supabase JS v2 client (includes Realtime)
-  if (!window.supabase) {
-    await new Promise((resolve, reject) => {
-      const s = document.createElement('script');
-      s.src = 'https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js';
-      s.onload = resolve; s.onerror = reject;
-      document.head.appendChild(s);
-    });
-  }
-
-  try {
-    const cfg = { url: SB_URL, key: SB_KEY };
-    realtimeClient = window.supabase.createClient(cfg.url, cfg.key, {
-      realtime: { params: { eventsPerSecond: 10 } }
-    });
-
-    realtimeChannel = realtimeClient
-      .channel('qms-changes')
-      .on('postgres_changes', {
-        event: '*',
-        schema: 'public',
-        table: TABLE
-      }, (payload) => {
-        // A change came in from another device
-        if (isSaving) return;   // skip our own write
-        const ev = payload.eventType;
-        if (ev === 'UPDATE' || ev === 'INSERT') {
-          const row = payload.new;
-          if (!row || !row.payload) return;
-          // Check if data actually changed
-          const newVer = row.updated_at;
-          if (newVer === lastVersion) return;
-
-          // Update local data
-          if (Array.isArray(row.payload) && row.payload.length >= 3) {
-            row.payload.forEach((unit, i) => {
-              if (Array.isArray(unit) && unit.length > 0) unitData[i] = unit;
-            });
-            if (row.checklists && typeof row.checklists === 'object') {
-              Object.assign(checklistStore, row.checklists);
-            }
-            lastVersion = newVer;
-            saveLocal();
-            renderAll(activeUnit || 0);
-            setSyncStatus('synced');
-          }
-
-          // Determine what changed and notify
-          notifyAll('📋', 'Project Updated', 'A staff member just updated the dashboard');
-        }
-      })
-      .subscribe((status) => {
-        if (status === 'SUBSCRIBED') {
-          console.log('Supabase Realtime connected ✓');
-          setSyncStatus('synced');
-        }
-      });
-  } catch(e) {
-    console.warn('Realtime init failed, using polling:', e.message);
-    // Fall back to polling which is already running
-  }
-}
-
-// ── Hook into saveRecord and saveChecklistAsProject to send notifications ──
-const _origSaveToStorage = saveToStorage;
-function saveToStorage() {
-  _origSaveToStorage();
-}
-
-// Patch renderAll to detect project additions we made
-let _prevUnit0Count = 0;
-let _prevUnit1Count = 0;
-const _origRenderAll = renderAll;
-function renderAll(u) {
-  _origRenderAll(u);
-}
-
-// ── Better approach: notify after successful push ──
-// We patch pushToCloud to notify after a successful save
 
 // ── INIT ──
 loadLocal();
@@ -3818,18 +3603,6 @@ document.getElementById('detailOverlay').addEventListener('click', e => {
 });
 
 </script>
-
-<!-- ── NOTIFICATION BANNER ── -->
-<div id="notifBanner" class="notif-banner" onclick="dismissNotif()">
-  <div class="notif-icon" id="notifIcon">🔔</div>
-  <div class="notif-content">
-    <div class="notif-title" id="notifTitle">LEC QMS ALERT</div>
-    <div class="notif-body" id="notifBody">Data updated</div>
-    <div class="notif-time" id="notifTime"></div>
-  </div>
-  <button class="notif-close" onclick="dismissNotif(); event.stopPropagation()">✕</button>
-</div>
-
 <div id="saveToast" class="save-toast"></div>
 
 
