@@ -1152,6 +1152,43 @@
   .project-name-link:hover { color:#0d4f7a; }
 
 
+
+  /* ── PDF UPLOAD ── */
+  .pdf-upload-wrap { display:flex; align-items:center; flex-wrap:wrap; gap:8px; }
+  .pdf-upload-btn {
+    display:inline-flex; align-items:center; gap:6px;
+    background:#fff; border:1px dashed #c8d4bc; border-radius:6px;
+    padding:8px 14px; font-size:12px; color:#4e6840; cursor:pointer;
+    transition:all 0.15s; white-space:nowrap;
+  }
+  .pdf-upload-btn:hover { border-color:var(--gold); color:#7a5500; background:#fffdf0; }
+  .pdf-existing { display:flex; align-items:center; gap:4px; background:#fef2f2; border:1px solid #fca5a5; border-radius:6px; padding:6px 10px; }
+
+  /* ── PDF VIEWER MODAL ── */
+  #pdfViewerOverlay {
+    position:fixed; inset:0; background:rgba(5,10,5,0.7);
+    z-index:400; display:flex; align-items:center; justify-content:center;
+    padding:16px; opacity:0; pointer-events:none; transition:opacity 0.2s;
+    backdrop-filter:blur(6px);
+  }
+  #pdfViewerOverlay.open { opacity:1; pointer-events:all; }
+  #pdfViewerModal {
+    background:#fff; border-radius:10px; width:100%; max-width:900px;
+    height:90vh; display:flex; flex-direction:column;
+    box-shadow:0 24px 80px rgba(0,0,0,0.5); overflow:hidden;
+  }
+  .pdf-viewer-head {
+    background:linear-gradient(135deg,#0a0f18,#162030);
+    padding:14px 20px; border-bottom:3px solid var(--gold);
+    display:flex; align-items:center; gap:12px;
+  }
+  .pdf-viewer-title { font-family:'Bebas Neue',sans-serif; font-size:17px; letter-spacing:2px; color:var(--gold); flex:1; }
+  #pdfFrame { flex:1; border:none; width:100%; }
+  .pdf-viewer-foot {
+    padding:10px 16px; border-top:1px solid #c8d4bc; background:#f0f5e8;
+    display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:8px;
+  }
+
 </style>
 
 <!-- ── HEADER ── -->
@@ -1357,6 +1394,7 @@
       <div>
         <div class="section-title">Technical <span class="red">Specifications</span> &amp; Standards</div>
         <div class="section-sub">// UNIT 3 · STANDARDS REGISTRY · QUALITY MANAGEMENT SECTION</div>
+        <div class="section-sub" style="font-family:'Bebas Neue',sans-serif;font-size:14px;letter-spacing:2px;color:var(--gold);margin-top:4px;opacity:0.85">QMS Document</div>
       </div>
     </div>
     <div class="stats-grid" id="stats-2"></div>
@@ -1376,6 +1414,7 @@
         <option value="Galvanize">Galvanize</option>
         <option value="Pole and Towers">Pole and Towers</option>
         <option value="LAB Equipment">LAB Equipment</option>
+        <option value="QMS Documents">QMS Documents</option>
       </select>
       <select class="filter-select" id="frev-2">
         <option value="">All Revisions</option>
@@ -1408,6 +1447,7 @@
             <th>Approved By</th>
             <th>Scope / Description</th>
             <th>Remarks</th>
+            <th>Document</th>
             <th>Actions</th>
           </tr></thead>
           <tbody id="tbody-2"></tbody>
@@ -1872,6 +1912,7 @@ function renderTable(u) {
         <td>${r.approvedBy}</td>
         <td><div class="comment-cell" title="${r.scope}">${r.scope}</div></td>
         <td><div class="comment-cell" title="${r.remarks}">${r.remarks}</div></td>
+        <td>${r.pdfData ? `<button class="icon-btn" title="View PDF" onclick="viewPDF(${ri})" style="background:rgba(220,38,38,0.10);border-color:rgba(220,38,38,0.3);color:#dc2626;font-size:11px;padding:4px 8px;border-radius:5px;white-space:nowrap">📄 View</button>` : '<span style="font-size:10px;color:#aaa">—</span>'}</td>
         <td><div class="action-icons">
           <button class="icon-btn" title="Edit" onclick="openModal(2,${ri})">✏</button>
           <button class="icon-btn del" title="Delete" onclick="delRecord(2,${ri})">🗑</button>
@@ -1933,7 +1974,7 @@ function openModal(u, idx=null) {
   } else {
     html += field('title','Spec / Standard Title','text',r?.title||'','Full title of document');
     html += field('docNo','Document #','text',r?.docNo||'','TSS-LEC-000');
-    html += fselect('category','Category',['Transformer','Overhead Line','Underground','Switchgear','Protection','Safety','Galvanize','Pole and Towers','LAB Equipment'],r?.category||'Transformer');
+    html += fselect('category','Category',['Transformer','Overhead Line','Underground','Switchgear','Protection','Safety','Galvanize','Pole and Towers','LAB Equipment','QMS Documents'],r?.category||'Transformer');
     // Dynamic sub-category for Pole and Towers
     html += `<div class="form-group" id="pole_sub_group" style="display:${(r?.category==='Pole and Towers')?'flex':'none'}">
       <label>Pole Type</label>
@@ -1963,6 +2004,15 @@ function openModal(u, idx=null) {
     html += field('approvedBy','Approved By','text',r?.approvedBy||'','Director / CEO');
     html += `<div class="form-group full"><label>Scope / Description</label><textarea id="f_scope" placeholder="Describe the scope of this standard…">${r?.scope||''}</textarea></div>`;
     html += `<div class="form-group full"><label>Remarks</label><textarea id="f_remarks" placeholder="Any remarks or notes…">${r?.remarks||''}</textarea></div>`;
+    const _hasPDF = !!(r?.pdfData);
+    html += '<div class="form-group full"><label>Upload PDF Document</label><div class="pdf-upload-wrap" id="pdfUploadWrap">';
+    if (_hasPDF) {
+      html += '<div class="pdf-existing"><span style="color:#dc2626;font-size:13px">📄</span><span style="font-size:12px;color:#1a2a12;margin-left:6px">' + (r?.pdfName||'Document uploaded') + '</span><button type="button" onclick="clearPDF()" style="background:none;border:none;color:#dc2626;cursor:pointer;font-size:11px;margin-left:8px">✕ Remove</button></div>';
+    }
+    html += '<label class="pdf-upload-btn" for="f_pdfFile"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg> ' + (_hasPDF ? 'Replace PDF' : 'Choose PDF File') + '</label>';
+    html += '<input type="file" id="f_pdfFile" accept=".pdf" style="display:none" onchange="handlePDFUpload(this)">';
+    html += '<span id="pdfFileName" style="font-size:11px;color:#4e6840;margin-left:8px">' + (_hasPDF ? '' : 'No file selected') + '</span>';
+    html += '</div></div>';
   }
 
   html += '</div>';
@@ -2015,6 +2065,8 @@ function saveRecord() {
       title:gv('f_title'), docNo:gv('f_docNo'), category:gv('f_category'),
       poleType: gv('f_poleType') || '',
       equipType: gv('f_equipType') || '',
+      pdfData: window._pendingPDF === '__CLEAR__' ? '' : (window._pendingPDF || (editIdx !== null && unitData[2][editIdx]?.pdfData) || ''),
+      pdfName: window._pendingPDF === '__CLEAR__' ? '' : (window._pendingPDFName || (editIdx !== null && unitData[2][editIdx]?.pdfName) || ''),
       version:gv('f_version'), issueDate:gv('f_issueDate'), reviewDate:gv('f_reviewDate'),
       revision:gv('f_revision'), preparedBy:gv('f_preparedBy'), approvedBy:gv('f_approvedBy'),
       scope:gv('f_scope'), remarks:gv('f_remarks'),
@@ -3568,6 +3620,13 @@ document.getElementById('clOverlay').addEventListener('click', e => {
   if (e.target === document.getElementById('clOverlay')) closeChecklist();
 });
 
+
+
+
+
+
+
+
 // ── PROJECT DETAIL VIEW ──
 function openDetail(r) {
   if (!r) return;
@@ -3660,9 +3719,89 @@ document.getElementById('detailOverlay').addEventListener('click', e => {
   if (e.target === document.getElementById('detailOverlay')) closeDetail();
 });
 
+
+// ══════════════════════════════════════════════
+//  PDF DOCUMENT HOSTING
+// ══════════════════════════════════════════════
+
+window._pendingPDF     = '';
+window._pendingPDFName = '';
+
+function handlePDFUpload(input) {
+  const file = input.files[0];
+  if (!file) return;
+  if (file.type !== 'application/pdf') {
+    showToast('⚠ Please select a PDF file only'); return;
+  }
+  if (file.size > 5 * 1024 * 1024) {
+    showToast('⚠ PDF too large — maximum 5 MB'); return;
+  }
+  const reader = new FileReader();
+  reader.onload = e => {
+    window._pendingPDF     = e.target.result;   // base64 data URI
+    window._pendingPDFName = file.name;
+    const lbl = document.getElementById('pdfFileName');
+    if (lbl) lbl.textContent = '✓ ' + file.name;
+    showToast('✓ PDF ready — click Save to attach');
+  };
+  reader.readAsDataURL(file);
+}
+
+function clearPDF() {
+  window._pendingPDF     = '__CLEAR__';
+  window._pendingPDFName = '';
+  const wrap = document.getElementById('pdfUploadWrap');
+  if (wrap) {
+    const existing = wrap.querySelector('.pdf-existing');
+    if (existing) existing.remove();
+    const lbl = document.getElementById('pdfFileName');
+    if (lbl) lbl.textContent = 'File removed — save to confirm';
+  }
+}
+
+function viewPDF(ri) {
+  const r = unitData[2][ri];
+  if (!r || !r.pdfData) return;
+  document.getElementById('pdfViewerTitle').textContent = r.title || 'Document';
+  document.getElementById('pdfViewerName').textContent  = r.pdfName || '';
+  document.getElementById('pdfFrame').src               = r.pdfData;
+  document.getElementById('pdfViewerOverlay').classList.add('open');
+}
+
+function closePDFViewer() {
+  document.getElementById('pdfViewerOverlay').classList.remove('open');
+  document.getElementById('pdfFrame').src = '';
+}
+
+function downloadPDF() {
+  // Find the record being viewed
+  const title = document.getElementById('pdfViewerTitle').textContent;
+  const rec = unitData[2].find(r => r.title === title);
+  if (!rec || !rec.pdfData) return;
+  const a = document.createElement('a');
+  a.href = rec.pdfData;
+  a.download = rec.pdfName || (rec.docNo + '.pdf');
+  a.click();
+}
+
+// Reset pending PDF on modal open/close
+const _origOpenModal = openModal;
+function openModal(u, idx) {
+  window._pendingPDF     = '';
+  window._pendingPDFName = '';
+  _origOpenModal(u, idx);
+}
+
+document.getElementById('pdfViewerOverlay').addEventListener('click', e => {
+  if (e.target === document.getElementById('pdfViewerOverlay')) closePDFViewer();
+});
+
 </script>
 
 <div id="saveToast" class="save-toast"></div>
+
+
+
 
 <!-- ── PROJECT DETAIL MODAL ── -->
 <div id="detailOverlay">
@@ -3677,6 +3816,26 @@ document.getElementById('detailOverlay').addEventListener('click', e => {
     <div class="detail-body" id="detailBody"></div>
     <div class="detail-foot">
       <button class="btn btn-ghost" onclick="closeDetail()">Close</button>
+    </div>
+  </div>
+</div>
+
+
+<!-- ── PDF VIEWER MODAL ── -->
+<div id="pdfViewerOverlay">
+  <div id="pdfViewerModal">
+    <div class="pdf-viewer-head">
+      <span style="font-size:20px">📄</span>
+      <div class="pdf-viewer-title" id="pdfViewerTitle">Document</div>
+      <button class="modal-close" onclick="closePDFViewer()">✕</button>
+    </div>
+    <iframe id="pdfFrame" title="PDF Document"></iframe>
+    <div class="pdf-viewer-foot">
+      <span id="pdfViewerName" style="font-size:11px;color:#4e6840;font-family:'DM Mono',monospace"></span>
+      <div style="display:flex;gap:8px">
+        <button class="btn btn-ghost" onclick="downloadPDF()" style="font-size:12px">⬇ Download</button>
+        <button class="btn btn-ghost" onclick="closePDFViewer()">Close</button>
+      </div>
     </div>
   </div>
 </div>
