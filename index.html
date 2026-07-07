@@ -3621,12 +3621,6 @@ document.getElementById('clOverlay').addEventListener('click', e => {
 });
 
 
-
-
-
-
-
-
 // ── PROJECT DETAIL VIEW ──
 function openDetail(r) {
   if (!r) return;
@@ -3784,13 +3778,13 @@ function downloadPDF() {
   a.click();
 }
 
-// Reset pending PDF on modal open/close
-const _origOpenModal = openModal;
-function openModal(u, idx) {
+// Reset pending PDF state whenever modal opens
+const _openModalOrig = openModal;
+openModal = function(u, idx=null) {
   window._pendingPDF     = '';
   window._pendingPDFName = '';
-  _origOpenModal(u, idx);
-}
+  _openModalOrig(u, idx);
+};
 
 document.getElementById('pdfViewerOverlay').addEventListener('click', e => {
   if (e.target === document.getElementById('pdfViewerOverlay')) closePDFViewer();
@@ -3799,9 +3793,6 @@ document.getElementById('pdfViewerOverlay').addEventListener('click', e => {
 </script>
 
 <div id="saveToast" class="save-toast"></div>
-
-
-
 
 <!-- ── PROJECT DETAIL MODAL ── -->
 <div id="detailOverlay">
