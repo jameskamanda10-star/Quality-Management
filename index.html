@@ -2435,6 +2435,11 @@ function clearStorage() {
 // ── INIT ──
 loadLocal();
 renderAll(0);
+// Show diagnostic immediately so user can see what's happening
+setTimeout(() => {
+  document.getElementById('diagPanel').classList.add('show');
+  runDiagnostic();
+}, 300);
 connectToGitHub();
 
 // ══════════════════════════════════════════════
@@ -3794,22 +3799,29 @@ async function runDiagnostic() {
   panel.classList.add('show');
 
   function set(id, state, text) {
-    document.getElementById('d'+id).className = 'diag-dot ' + state;
-    document.getElementById('d'+id+'t').textContent = text;
+    const dot = document.getElementById('d'+id);
+    const txt = document.getElementById('d'+id+'t');
+    if (dot) dot.className = 'diag-dot ' + state;
+    if (txt) txt.textContent = text;
   }
 
   // 1. Internet
   set(1,'spin','Checking internet…');
   if (!navigator.onLine) { set(1,'err','No internet connection'); return; }
-  set(1,'ok','Internet: Online ✓');
+  set(1,'ok','Online ✓');
 
-  // 2. GitHub API reachable
-  set(2,'spin','Reaching api.github.com…');
+  // 2. Raw GitHub readable (no auth)
+  set(2,'spin','Checking raw.githubusercontent.com…');
   try {
-    const r = await fetch('https://api.github.com/', { headers: { 'Accept': 'application/json' } });
-    set(2, r.ok ? 'ok' : 'err', 'GitHub API: HTTP ' + r.status + (r.ok?' ✓':' ✗'));
-    if (!r.ok) return;
-  } catch(e) { set(2,'err','GitHub API unreachable: ' + e.message); return; }
+    const testUrl = 'https://raw.githubusercontent.com/' + GH_OWNER + '/' + GH_REPO + '/HEAD/README.md';
+    const r = await fetch(testUrl, { cache: 'no-store' });
+    if (r.ok || r.status === 404) {
+      set(2,'ok','raw.githubusercontent.com reachable ✓ (HTTP ' + r.status + ')');
+    } else {
+      set(2,'err','raw.githubusercontent.com returned HTTP ' + r.status);
+      return;
+    }
+  } catch(e) { set(2,'err','raw.githubusercontent.com unreachable: ' + e.message); return; }
 
   // 3. Token valid
   set(3,'spin','Validating token…');
@@ -3817,44 +3829,49 @@ async function runDiagnostic() {
     const r = await fetch('https://api.github.com/user', {
       headers: { 'Authorization': 'Bearer ' + GH_TOKEN, 'Accept': 'application/vnd.github+json' }
     });
-    const j = await r.json();
-    if (r.ok) { set(3,'ok','Token valid — GitHub user: ' + j.login + (j.login !== GH_OWNER ? ' ⚠ (expected ' + GH_OWNER + ')' : ' ✓')); }
-    else { set(3,'err','Token error ' + r.status + ': ' + (j.message||'')); return; }
+    const j = await r.json().catch(()=>({}));
+    if (r.ok) {
+      const match = j.login === GH_OWNER;
+      set(3, match?'ok':'err', 'Token user: ' + j.login + (match?' ✓':' ✗ expected '+GH_OWNER));
+      if (!match) { set(4,'err','Token belongs to wrong account'); return; }
+    } else {
+      set(3,'err','Token ' + r.status + ': ' + (j.message||'Bad credentials'));
+      return;
+    }
   } catch(e) { set(3,'err','Token check failed: ' + e.message); return; }
 
-  // 4. Repo exists
-  set(4,'spin','Scanning your repos to find the data repo…');
+  // 4. Repo accessible
+  set(4,'spin','Checking repo ' + GH_REPO + '…');
   try {
-    const r = await fetch('https://api.github.com/user/repos?per_page=100&sort=updated', {
+    const r = await fetch('https://api.github.com/repos/' + GH_OWNER + '/' + GH_REPO, {
       headers: { 'Authorization': 'Bearer ' + GH_TOKEN, 'Accept': 'application/vnd.github+json' }
     });
-    if (!r.ok) { set(4,'err','Could not list repos: HTTP ' + r.status); return; }
-    const repos = await r.json();
-    const names = repos.map(r=>r.name);
-    set(4,'ok','Your repos: ' + names.join(', '));
-
-    // Try to match a data/qms repo
-    const match = repos.find(r => /qms/i.test(r.name) || /lec.*data/i.test(r.name) || /data.*lec/i.test(r.name));
-    if (match) {
-      GH_REPO = match.name;
-      set(4,'ok','✓ Found data repo: ' + GH_REPO + ' — connecting…');
-      await connectToGitHub();
+    const j = await r.json().catch(()=>({}));
+    if (r.ok) {
+      set(4,'ok','Repo found: ' + j.full_name + ' ✓');
     } else {
-      set(4,'err','No QMS/data repo found. Repos: ' + names.join(', '));
-      set(5,'err','Please create a repo and tell me its exact name');
+      set(4,'err','Repo ' + r.status + ': ' + (j.message||'not found'));
+      return;
     }
-    return;
-  } catch(e) { set(4,'err','Repo scan failed: ' + e.message); return; }
+  } catch(e) { set(4,'err','Repo check failed: ' + e.message); return; }
 
-  // 5. Data file
+  // 5. Data file / write test
   set(5,'spin','Checking data file…');
   try {
-    const r = await fetch('https://api.github.com/repos/' + GH_OWNER + '/' + GH_REPO + '/contents/' + GH_FILE, {
-      headers: { 'Authorization': 'Bearer ' + GH_TOKEN, 'Accept': 'application/vnd.github+json' }
-    });
-    if (r.ok) { set(5,'ok','Data file exists ✓ — sync should work'); }
-    else if (r.status === 404) { set(5,'ok','No data file yet — will be created on first save ✓'); }
-    else { set(5,'err','File check: HTTP ' + r.status); }
+    const rawUrl = 'https://raw.githubusercontent.com/' + GH_OWNER + '/' + GH_REPO + '/main/' + GH_FILE;
+    const r = await fetch(rawUrl, { cache:'no-store' });
+    if (r.ok) {
+      set(5,'ok','✅ Data file exists — sync is ready!');
+      setSyncStatus('synced');
+      document.getElementById('diagPanel').classList.remove('show');
+      connectToGitHub();
+    } else if (r.status === 404) {
+      set(5,'ok','No data file yet — will be created on first save ✓');
+      setSyncStatus('synced');
+      connectToGitHub();
+    } else {
+      set(5,'err','File check HTTP ' + r.status);
+    }
   } catch(e) { set(5,'err','File check failed: ' + e.message); }
 }
 
@@ -3870,8 +3887,6 @@ setSyncStatus = function(state, detail) {
 </script>
 
 <div id="saveToast" class="save-toast"></div>
-
-
 
 
 <!-- ── PROJECT DETAIL MODAL ── -->
@@ -3910,6 +3925,7 @@ setSyncStatus = function(state, detail) {
     </div>
   </div>
 </div>
+
 
 <!-- ── DIAGNOSTIC PANEL ── -->
 <div id="diagPanel">
