@@ -1204,7 +1204,7 @@
     </div>
     <div class="header-right">
       <div class="live-badge"><span class="live-dot"></span> SYSTEM LIVE</div>
-      <div id="syncBadge" class="live-badge" style="cursor:default;background:rgba(245,196,0,0.12);color:#a07800;border-color:rgba(245,196,0,0.3)" title="Connecting to shared database…">↻ Connecting…</div>
+      <div id="syncBadge" class="live-badge" onclick="connectToGitHub()" style="cursor:pointer;background:rgba(245,196,0,0.12);color:#a07800;border-color:rgba(245,196,0,0.3)" title="Click to reconnect">↻ Connecting…</div>
 
       <div class="header-clock" id="clock"></div>
     </div>
@@ -2145,41 +2145,39 @@ document.addEventListener('keydown', e=>{ if(e.key==='Escape') closeModal(); });
 
 
 // ══════════════════════════════════════════════
-//  LIVE SYNC — SUPABASE + localStorage fallback
-//  Same data · All devices · All browsers · Free
+//  LIVE SYNC — GITHUB API (Free, No Quotas)
+//  All devices · All browsers · Permanent
 // ══════════════════════════════════════════════
 
 const LOCAL_KEY   = 'lec_qms_data';
-const TABLE       = 'qms_data';      // Supabase table name
-const ROW_ID      = 1;               // single row stores all data
-const POLL_MS     = 10000;           // check for remote changes every 10s
-
-let pollTimer     = null;
-let lastVersion   = null;
-let isSaving      = false;
-let saveTimer     = null;
+const GH_FILE     = 'qms_data.json';
+const POLL_MS     = 15000;
 
 // ── Hardcoded credentials — auto-connects on every device ──
-const SB_URL = 'https://uuzrpampxczzrqdjxbus.supabase.co';
-const SB_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InV1enJwYW1weGN6enJxZGp4YnVzIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzM5OTc0OTAsImV4cCI6MjA4OTU3MzQ5MH0.0gYO8aKzQT9DjJJJ6nxltLEsLtHJDRQx4LNyzZgRHik';
+const GH_OWNER = 'jameskamanda10-star';
+const GH_REPO  = 'LEC-QMS-Data';
+const GH_TOKEN = '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';
 
-function getSBConfig() {
-  return { url: SB_URL, key: SB_KEY };
-}
+let pollTimer = null;
+let lastSHA   = null;
+let isSaving  = false;
+let saveTimer = null;
+const checklistStore = {};
+
 function isConfigured() { return true; }
-function sbHeaders() {
+function ghApiUrl() {
+  return 'https://api.github.com/repos/' + GH_OWNER + '/' + GH_REPO + '/contents/' + GH_FILE;
+}
+function ghHeaders() {
   return {
-    'Content-Type':  'application/json',
-    'apikey':        SB_KEY,
-    'Authorization': 'Bearer ' + SB_KEY,
-    'Prefer':        'return=representation'
+    'Authorization': 'Bearer ' + GH_TOKEN,
+    'Accept': 'application/vnd.github+json',
+    'X-GitHub-Api-Version': '2022-11-28',
+    'Content-Type': 'application/json'
   };
 }
-function sbUrl(path) {
-  return SB_URL + '/rest/v1/' + path;
-}
 
-// ── Local cache (offline fallback) ──
+// ── Local cache ──
 function saveLocal() {
   try {
     localStorage.setItem(LOCAL_KEY, JSON.stringify(unitData));
@@ -2195,138 +2193,99 @@ function loadLocal() {
     saved.forEach((unit, i) => {
       if (Array.isArray(unit) && unit.length > 0) unitData[i] = unit;
     });
-    // Restore checklistStore from local cache
     const rawCL = localStorage.getItem(LOCAL_KEY + '_cl');
-    if (rawCL) {
-      const cl = JSON.parse(rawCL);
-      Object.assign(checklistStore, cl);
-    }
+    if (rawCL) Object.assign(checklistStore, JSON.parse(rawCL));
     return true;
   } catch(e) { return false; }
 }
 
-// ── Supabase REST helpers ──
-function authHeaders(extra) {
-  return Object.assign({
-    'Content-Type':  'application/json',
-    'apikey':        SB_KEY,
-    'Authorization': 'Bearer ' + SB_KEY,
-    'Prefer':        'return=representation'
-  }, extra || {});
-}
-
-// ── Test connection and surface exact error ──
-async function testConnection() {
-  try {
-    const res = await fetch(SB_URL + '/rest/v1/', {
-      headers: { 'apikey': SB_KEY }
-    });
-    if (res.ok || res.status === 200) return { ok: true };
-    const body = await res.text();
-    return { ok: false, status: res.status, body };
-  } catch(e) {
-    return { ok: false, status: 0, body: e.message };
-  }
-}
-
-// ── Push to Supabase (upsert single row) ──
-
+// ── Push to GitHub ──
 async function pushToCloud() {
   if (!isConfigured()) return;
   isSaving = true;
   setSyncStatus('saving');
-  const ts = Date.now();
   try {
-    // Try PATCH first (update existing row)
-    const patchRes = await fetch(sbUrl(TABLE + '?id=eq.' + ROW_ID), {
-      method: 'PATCH',
-      headers: authHeaders(),
-      body: JSON.stringify({ payload: unitData, checklists: checklistStore, updated_at: new Date(ts).toISOString() })
+    const payload = {
+      d: unitData,
+      checklists: checklistStore,
+      updated_at: new Date().toISOString()
+    };
+    const content = btoa(unescape(encodeURIComponent(JSON.stringify(payload))));
+    const body = {
+      message: 'QMS data update ' + new Date().toLocaleString(),
+      content,
+    };
+    if (lastSHA) body.sha = lastSHA;   // required for updates
+    const res = await fetch(ghApiUrl(), {
+      method: 'PUT',
+      headers: ghHeaders(),
+      body: JSON.stringify(body)
     });
-    const patchBody = await patchRes.text();
-    const patchRows = patchBody ? JSON.parse(patchBody) : [];
-
-    if (!patchRes.ok || (Array.isArray(patchRows) && patchRows.length === 0)) {
-      // Row doesn't exist — INSERT
-      const insRes = await fetch(sbUrl(TABLE), {
-        method: 'POST',
-        headers: authHeaders({ 'Prefer': 'return=minimal' }),
-        body: JSON.stringify({ id: ROW_ID, payload: unitData, checklists: checklistStore, updated_at: new Date(ts).toISOString() })
-      });
-      if (!insRes.ok) {
-        const errBody = await insRes.text();
-        throw new Error('INSERT ' + insRes.status + ' — ' + errBody.substring(0, 120));
-      }
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.message || 'PUT ' + res.status);
     }
-    lastVersion = ts;
+    const json = await res.json();
+    lastSHA = json.content?.sha || lastSHA;
     saveLocal();
     setSyncStatus('synced');
   } catch(e) {
-    const msg = e.message || '';
-    const hint = msg.includes('checklists') || msg.includes('42703')
-      ? ' — Run SQL: ALTER TABLE qms_data ADD COLUMN IF NOT EXISTS checklists jsonb DEFAULT \'{}\'::jsonb;'
-      : '';
-    setSyncStatus('error', msg + hint);
-    console.error('Supabase push failed:', msg + hint);
-    showToast('⚠ Sync error: ' + msg.substring(0, 80) + (hint ? ' (missing column — see chat)' : ''));
+    console.error('GitHub push failed:', e.message);
+    setSyncStatus('error', e.message);
+    showToast('⚠ Sync error: ' + e.message.substring(0, 80));
   }
   isSaving = false;
 }
 
-// ── Pull from Supabase ──
+// ── Pull from GitHub ──
 async function pullFromCloud() {
   if (!isConfigured()) return null;
-  const res = await fetch(sbUrl(TABLE + '?id=eq.' + ROW_ID + '&select=payload,checklists,updated_at'), {
-    headers: authHeaders({ 'Prefer': '' })
+  const res = await fetch(ghApiUrl() + '?t=' + Date.now(), {
+    headers: ghHeaders()
   });
-  if (!res.ok) {
-    const body = await res.text();
-    throw new Error('GET ' + res.status + ' — ' + body.substring(0, 150));
-  }
-  const rows = await res.json();
-  if (!rows || rows.length === 0) return null;
-  return rows[0];
+  if (res.status === 404) return null;   // file not yet created
+  if (!res.ok) throw new Error('GET ' + res.status);
+  const json = await res.json();
+  lastSHA = json.sha;
+  // Decode base64 content
+  const text = decodeURIComponent(escape(atob(json.content.replace(/\n/g, ''))));
+  return JSON.parse(text);
 }
 
-// ── Save (debounced 600ms) ──
+// ── saveToStorage — called on every mutation ──
 function saveToStorage() {
   saveLocal();
   if (!isConfigured()) { setSyncStatus('local'); return; }
   clearTimeout(saveTimer);
-  saveTimer = setTimeout(() => pushToCloud(), 600);
+  saveTimer = setTimeout(() => pushToCloud(), 800);
 }
 
 // ── Load on startup ──
 async function loadFromStorage() {
   const gotLocal = loadLocal();
-  if (gotLocal) renderAll(0);                // show cached data immediately
+  if (gotLocal) renderAll(0);
   if (!isConfigured()) { setSyncStatus('local'); return; }
   setSyncStatus('loading');
   try {
-    const row = await pullFromCloud();
-    if (row && row.payload && Array.isArray(row.payload) && row.payload.length >= 3) {
-      row.payload.forEach((unit, i) => {
+    const data = await pullFromCloud();
+    if (data && data.d && Array.isArray(data.d) && data.d.length >= 3) {
+      data.d.forEach((unit, i) => {
         if (Array.isArray(unit) && unit.length > 0) unitData[i] = unit;
       });
-      if (row.checklists && typeof row.checklists === 'object') {
-        Object.assign(checklistStore, row.checklists);
-      }
-      lastVersion = row.updated_at;
+      if (data.checklists) Object.assign(checklistStore, data.checklists);
       saveLocal();
       renderAll(activeUnit || 0);
       setSyncStatus('synced');
-      showToast('✓ Live data loaded from Supabase');
     } else {
-      // First time — push sample/local data to cloud
+      // First run — push local data to GitHub
       await pushToCloud();
-      showToast('✓ Dashboard data initialised on Supabase — all devices now share one database');
+      showToast('✓ Dashboard data initialised on GitHub — all devices now share one file');
     }
   } catch(e) {
-    const msg = e.message || 'Unknown error';
-    setSyncStatus('error', msg);
-    console.error('Supabase load failed:', msg);
-    showToast('⚠ Sync error: ' + msg.substring(0, 80));
-    if (!gotLocal) renderAll(0);
+    setSyncStatus('offline');
+    console.error('GitHub load failed:', e.message);
+    showToast('⚠ Cannot reach GitHub: ' + e.message.substring(0, 60));
+    scheduleRetry();
   }
 }
 
@@ -2337,17 +2296,18 @@ function startPolling() {
   pollTimer = setInterval(async () => {
     if (!navigator.onLine || isSaving) return;
     try {
-      const row = await pullFromCloud();
-      if (!row || !row.payload) return;
-      const newVer = row.updated_at;
-      if (newVer && newVer !== lastVersion) {
-        row.payload.forEach((unit, i) => {
+      const res = await fetch(ghApiUrl() + '?t=' + Date.now(), { headers: ghHeaders() });
+      if (!res.ok) return;
+      const json = await res.json();
+      if (json.sha === lastSHA) return;   // no change
+      const text = decodeURIComponent(escape(atob(json.content.replace(/\n/g, ''))));
+      const data = JSON.parse(text);
+      if (data && data.d && Array.isArray(data.d) && data.d.length >= 3) {
+        data.d.forEach((unit, i) => {
           if (Array.isArray(unit) && unit.length > 0) unitData[i] = unit;
         });
-        if (row.checklists && typeof row.checklists === 'object') {
-          Object.assign(checklistStore, row.checklists);
-        }
-        lastVersion = newVer;
+        if (data.checklists) Object.assign(checklistStore, data.checklists);
+        lastSHA = json.sha;
         saveLocal();
         renderAll(activeUnit || 0);
         setSyncStatus('synced');
@@ -2358,19 +2318,60 @@ function startPolling() {
 }
 function stopPolling() { if (pollTimer) { clearInterval(pollTimer); pollTimer = null; } }
 
+// ── Retry logic ──
+let _retryTimer = null;
+function scheduleRetry() {
+  clearTimeout(_retryTimer);
+  _retryTimer = setTimeout(() => {
+    if (navigator.onLine) connectToGitHub();
+    else scheduleRetry();
+  }, 30000);
+}
+
+// ── Main connect function ──
+async function connectToGitHub() {
+  setSyncStatus('loading');
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    try {
+      const data = await pullFromCloud();
+      if (data && data.d && Array.isArray(data.d) && data.d.length >= 3) {
+        data.d.forEach((unit, i) => {
+          if (Array.isArray(unit) && unit.length > 0) unitData[i] = unit;
+        });
+        if (data.checklists) Object.assign(checklistStore, data.checklists);
+        saveLocal();
+        renderAll(activeUnit || 0);
+      } else {
+        await pushToCloud();
+      }
+      setSyncStatus('synced');
+      startPolling();
+      return;
+    } catch(e) {
+      if (attempt < 3) { await new Promise(r => setTimeout(r, 2000 * attempt)); continue; }
+      setSyncStatus('offline');
+      showToast('⚠ Cannot reach GitHub — working offline. Will retry in 30s.');
+      scheduleRetry();
+    }
+  }
+}
+
+// ── Badge click to retry ──
+document.addEventListener('DOMContentLoaded', () => {
+  const badge = document.getElementById('syncBadge');
+  if (badge) badge.addEventListener('click', () => { clearTimeout(_retryTimer); connectToGitHub(); });
+});
+
 // ── Re-sync on tab focus ──
 document.addEventListener('visibilitychange', () => {
   if (!document.hidden && isConfigured() && navigator.onLine) {
-    pullFromCloud().then(row => {
-      if (!row || !row.payload) return;
-      if (row.updated_at !== lastVersion) {
-        row.payload.forEach((unit, i) => {
+    pullFromCloud().then(data => {
+      if (!data) return;
+      if (data.d && Array.isArray(data.d) && data.d.length >= 3) {
+        data.d.forEach((unit, i) => {
           if (Array.isArray(unit) && unit.length > 0) unitData[i] = unit;
         });
-        if (row.checklists && typeof row.checklists === 'object') {
-          Object.assign(checklistStore, row.checklists);
-        }
-        lastVersion = row.updated_at;
+        if (data.checklists) Object.assign(checklistStore, data.checklists);
         saveLocal();
         renderAll(activeUnit || 0);
         setSyncStatus('synced');
@@ -2379,7 +2380,7 @@ document.addEventListener('visibilitychange', () => {
   }
 });
 
-window.addEventListener('online',  () => { if (isConfigured()) { loadFromStorage().then(() => startPolling()); } });
+window.addEventListener('online',  () => { clearTimeout(_retryTimer); connectToGitHub(); });
 window.addEventListener('offline', () => setSyncStatus('offline'));
 
 // ── Status badge ──
@@ -2387,65 +2388,39 @@ function setSyncStatus(state, detail) {
   const badge = document.getElementById('syncBadge');
   if (!badge) return;
   const map = {
-    synced:  { t:'☁ Live — All Devices Synced',   bg:'rgba(46,168,74,0.15)',  fg:'#2ea84a', bd:'rgba(46,168,74,0.3)'  },
-    saving:  { t:'↻ Saving…',                      bg:'rgba(245,196,0,0.12)',  fg:'#a07800', bd:'rgba(245,196,0,0.3)'  },
-    loading: { t:'↻ Connecting…',                  bg:'rgba(245,196,0,0.12)',  fg:'#a07800', bd:'rgba(245,196,0,0.3)'  },
-    queued:  { t:'⏳ Save Queued (offline)',        bg:'rgba(230,126,34,0.15)', fg:'#c06000', bd:'rgba(230,126,34,0.3)' },
-    offline: { t:'⚡ Offline — Local Cache Active', bg:'rgba(248,81,73,0.12)',  fg:'#c02000', bd:'rgba(248,81,73,0.3)'  },
-    error:   { t:'✕ Sync Error — see console',     bg:'rgba(200,34,0,0.15)',   fg:'#c02000', bd:'rgba(200,34,0,0.3)'   },
-    local:   { t:'💾 Local Only',                  bg:'rgba(74,159,212,0.12)', fg:'#1a6b9a', bd:'rgba(74,159,212,0.3)' },
+    synced:  { t:'☁ Live — All Devices Synced',    bg:'rgba(46,168,74,0.15)',  fg:'#2ea84a', bd:'rgba(46,168,74,0.3)'  },
+    saving:  { t:'↻ Saving…',                       bg:'rgba(245,196,0,0.12)',  fg:'#a07800', bd:'rgba(245,196,0,0.3)'  },
+    loading: { t:'↻ Connecting…',                   bg:'rgba(245,196,0,0.12)',  fg:'#a07800', bd:'rgba(245,196,0,0.3)'  },
+    queued:  { t:'⏳ Save Queued — Click to Retry', bg:'rgba(230,126,34,0.15)', fg:'#c06000', bd:'rgba(230,126,34,0.3)' },
+    offline: { t:'⚡ Offline — Click to Reconnect', bg:'rgba(248,81,73,0.12)',  fg:'#c02000', bd:'rgba(248,81,73,0.3)'  },
+    error:   { t:'✕ Sync Error — Click to Retry',  bg:'rgba(200,34,0,0.15)',   fg:'#c02000', bd:'rgba(200,34,0,0.3)'   },
+    local:   { t:'💾 Local Only',                   bg:'rgba(74,159,212,0.12)', fg:'#1a6b9a', bd:'rgba(74,159,212,0.3)' },
   };
   const s = map[state] || map.local;
-  badge.textContent  = s.t;
-  badge.style.background   = s.bg;
-  badge.style.color        = s.fg;
-  badge.style.borderColor  = s.bd;
-  badge.title = detail ? 'Error: ' + detail : 'Click to check sync status';
+  badge.textContent    = s.t;
+  badge.style.background  = s.bg;
+  badge.style.color       = s.fg;
+  badge.style.borderColor = s.bd;
+  badge.style.cursor      = 'pointer';
+  badge.title = detail ? 'Error: ' + detail : 'Click to reconnect';
 }
 
+// ── Setup stubs (credentials hardcoded) ──
+function openSyncSetup() {}
+function closeSyncSetup() {}
+async function saveSyncSetup() {}
 function clearStorage() {
-  if (!confirm('Reset ALL project data to the original sample data? This cannot be undone.')) return;
+  if (!confirm('Reset ALL project data to sample data? This cannot be undone.')) return;
   stopPolling();
   localStorage.removeItem(LOCAL_KEY);
+  localStorage.removeItem(LOCAL_KEY + '_cl');
   location.reload();
 }
-
-
 
 // ── INIT ──
 loadLocal();
 renderAll(0);
-
-// Self-check: verify table exists before full load
-(async () => {
-  setSyncStatus('loading');
-  try {
-    // Quick ping — check if table is reachable
-    const ping = await fetch(SB_URL + '/rest/v1/' + TABLE + '?limit=0', {
-      headers: authHeaders({ 'Prefer': '' })
-    });
-    if (ping.status === 404 || ping.status === 400) {
-      const body = await ping.text();
-      setSyncStatus('error', body.substring(0, 100));
-      showToast('⚠ Supabase table not found. Did you run the SQL in Step 2? Status: ' + ping.status);
-      console.error('Supabase table check failed:', ping.status, body);
-      return;
-    }
-    if (ping.status === 401 || ping.status === 403) {
-      setSyncStatus('error', 'Auth failed ' + ping.status);
-      showToast('⚠ Supabase auth failed (' + ping.status + '). Check your API key in Project Settings → API.');
-      console.error('Supabase auth failed:', ping.status);
-      return;
-    }
-    // Table OK — proceed with full load
-    await loadFromStorage();
-    startPolling();
-  } catch(e) {
-    setSyncStatus('offline');
-    showToast('⚠ Cannot reach Supabase. Check your internet connection.');
-    console.error('Supabase ping failed:', e.message);
-  }
-})();
+connectToGitHub();
 
 // ══════════════════════════════════════════════
 //  CHECKLIST DATA & LOGIC
@@ -2735,7 +2710,6 @@ const COMM_ITEMS_SECTIONS = [
 ];
 
 let currentChecklistType = 'nti';
-const checklistStore = {};   // key: project ref → { type, infoData, rowData, paramData, obsText, photoCaptions }
 
 
 // ─ PIC SLOT BUILDER ─
@@ -3621,6 +3595,12 @@ document.getElementById('clOverlay').addEventListener('click', e => {
 });
 
 
+
+
+
+
+
+
 // ── PROJECT DETAIL VIEW ──
 function openDetail(r) {
   if (!r) return;
@@ -3790,6 +3770,7 @@ document.getElementById('pdfViewerOverlay').addEventListener('click', e => {
   if (e.target === document.getElementById('pdfViewerOverlay')) closePDFViewer();
 });
 
+
 </script>
 
 <div id="saveToast" class="save-toast"></div>
@@ -3829,6 +3810,5 @@ document.getElementById('pdfViewerOverlay').addEventListener('click', e => {
     </div>
   </div>
 </div>
-
 </body>
 </html>
