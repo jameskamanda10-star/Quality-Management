@@ -2174,7 +2174,7 @@ document.addEventListener('keydown', e=>{ if(e.key==='Escape') closeModal(); });
 const LOCAL_KEY  = 'lec_qms_data';
 const GH_OWNER   = 'jameskamanda10-star';
 const GH_REPO    = 'LEC-QMS-Data';
-const GH_TOKEN   = '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';
+const GH_TOKEN   = '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';
 const GH_FILE    = 'qms_data.json';
 const GH_BRANCH  = 'main';
 const POLL_MS    = 15000;
@@ -3824,7 +3824,7 @@ async function runDiagnostic() {
   } catch(e) { set(2,'err','raw.githubusercontent.com unreachable: ' + e.message); return; }
 
   // 3. Token valid
-  set(3,'spin','Validating token…');
+  set(3,'spin','Validating token (using: ' + GH_TOKEN.substring(0,10) + '…)');
   try {
     const r = await fetch('https://api.github.com/user', {
       headers: { 'Authorization': 'Bearer ' + GH_TOKEN, 'Accept': 'application/vnd.github+json' }
@@ -3887,6 +3887,8 @@ setSyncStatus = function(state, detail) {
 </script>
 
 <div id="saveToast" class="save-toast"></div>
+
+
 
 
 <!-- ── PROJECT DETAIL MODAL ── -->
