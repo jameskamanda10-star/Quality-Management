@@ -2168,93 +2168,29 @@ document.addEventListener('keydown', e=>{ if(e.key==='Escape') closeModal(); });
 
 
 // ══════════════════════════════════════════════
-//  LIVE SYNC — GITHUB API (Free, No Quotas)
-//  All devices · All browsers · Permanent
+//  LIVE SYNC — GITHUB + localStorage fallback
 // ══════════════════════════════════════════════
 
-const LOCAL_KEY   = 'lec_qms_data';
-const GH_FILE     = 'qms_data.json';
-const POLL_MS     = 15000;
+const LOCAL_KEY  = 'lec_qms_data';
+const GH_OWNER   = 'jameskamanda10-star';
+const GH_REPO    = 'LEC-QMS-Data';
+const GH_TOKEN   = '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';
+const GH_FILE    = 'qms_data.json';
+const GH_BRANCH  = 'main';
+const POLL_MS    = 15000;
 
-// ── Hardcoded credentials — auto-connects on every device ──
-const GH_OWNER = 'jameskamanda10-star';
-const GH_TOKEN = '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';
-let   GH_REPO  = 'LEC-QMS-Data';    // confirmed repo name
+// Raw URL for reading — no auth, no CORS preflight issues
+const RAW_URL = 'https://raw.githubusercontent.com/' + GH_OWNER + '/' + GH_REPO + '/' + GH_BRANCH + '/' + GH_FILE;
+// API URL for writing
+const API_URL = 'https://api.github.com/repos/' + GH_OWNER + '/' + GH_REPO + '/contents/' + GH_FILE;
 
-let pollTimer = null;
-let lastSHA   = null;
-let isSaving  = false;
-let saveTimer = null;
+let pollTimer    = null;
+let lastSHA      = null;
+let lastHash     = null;
+let isSaving     = false;
+let saveTimer    = null;
+let _retryTimer  = null;
 const checklistStore = {};
-
-function isConfigured() { return !!(GH_REPO); }
-function ghApiUrl() {
-  return 'https://api.github.com/repos/' + GH_OWNER + '/' + GH_REPO + '/contents/' + GH_FILE;
-}
-// Read headers (minimal — avoids unnecessary CORS preflight)
-function ghReadHeaders() {
-  return {
-    'Authorization': 'Bearer ' + GH_TOKEN,
-    'Accept': 'application/vnd.github+json'
-  };
-}
-// Write headers (full — needed for PUT/POST)
-function ghHeaders() {
-  return {
-    'Authorization': 'Bearer ' + GH_TOKEN,
-    'Accept': 'application/vnd.github+json',
-    'Content-Type': 'application/json'
-  };
-}
-
-// ── Auto-discover the data repo ──
-// Tries common name variations first, then scans all repos
-async function discoverRepo() {
-  const h = { 'Authorization': 'Bearer ' + GH_TOKEN, 'Accept': 'application/vnd.github+json' };
-  const base = 'https://api.github.com/repos/' + GH_OWNER + '/';
-
-  // 1. Try common name variations
-  const candidates = [
-    'LEC-QMS-Data', 'lec-qms-data', 'LEC-QMS-data', 'lec-QMS-Data',
-    'LECQMSData', 'lec-qms', 'LEC-QMS', 'qms-data', 'QMS-Data',
-    'LEC_QMS_Data', 'lec_qms_data'
-  ];
-  for (const name of candidates) {
-    try {
-      const r = await fetchWithTimeout(base + name, { headers: { 'Authorization': 'Bearer ' + GH_TOKEN, 'Accept': 'application/vnd.github+json' } }, 8000);
-      if (r.ok) { GH_REPO = name; console.log('✓ Repo found:', name); return name; }
-    } catch(e) { /* try next */ }
-  }
-
-  // 2. Scan all user repos and find best match
-  try {
-    const r = await fetchWithTimeout('https://api.github.com/user/repos?per_page=100&sort=updated', { headers: { 'Authorization': 'Bearer ' + GH_TOKEN, 'Accept': 'application/vnd.github+json' } }, 12000);
-    if (r.ok) {
-      const repos = await r.json();
-      console.log('All repos:', repos.map(r=>r.name).join(', '));
-      // Look for repos with QMS or data in the name
-      const match = repos.find(r =>
-        /qms/i.test(r.name) ||
-        /lec.*data/i.test(r.name) ||
-        /data.*lec/i.test(r.name)
-      );
-      if (match) {
-        GH_REPO = match.name;
-        console.log('✓ Repo auto-discovered:', GH_REPO);
-        return GH_REPO;
-      }
-      // Last resort: use the first non-dashboard repo
-      const nonDash = repos.find(r => !/dashboard|pages|github|\.io/i.test(r.name));
-      if (nonDash) {
-        GH_REPO = nonDash.name;
-        console.log('⚠ Using first available repo:', GH_REPO);
-        return GH_REPO;
-      }
-    }
-  } catch(e) { console.error('Repo scan failed:', e.message); }
-
-  return null;
-}
 
 // ── Local cache ──
 function saveLocal() {
@@ -2278,77 +2214,105 @@ function loadLocal() {
   } catch(e) { return false; }
 }
 
-// ── Push to GitHub ──
+// ── Simple hash for change detection ──
+function quickHash(obj) {
+  const s = JSON.stringify(obj);
+  let h = 0;
+  for (let i = 0; i < Math.min(s.length, 500); i++)
+    h = (Math.imul(31, h) + s.charCodeAt(i)) | 0;
+  return h;
+}
+
+// ── READ via raw.githubusercontent.com (no auth, no CORS issues) ──
+async function pullFromCloud() {
+  // Add timestamp to bust CDN cache
+  const url = RAW_URL + '?t=' + Date.now();
+  const res = await fetch(url, { cache: 'no-store' });
+  if (res.status === 404) return null;  // file not created yet
+  if (!res.ok) throw new Error('Read failed: HTTP ' + res.status);
+  const text = await res.text();
+  return JSON.parse(text);
+}
+
+// ── Get SHA (needed for GitHub PUT) ──
+async function getSHA() {
+  const res = await fetch(API_URL, {
+    headers: {
+      'Authorization': 'Bearer ' + GH_TOKEN,
+      'Accept': 'application/vnd.github+json'
+    }
+  });
+  if (res.status === 404) return null;
+  if (!res.ok) throw new Error('SHA fetch: HTTP ' + res.status);
+  const j = await res.json();
+  return j.sha || null;
+}
+
+// ── WRITE via GitHub API ──
 async function pushToCloud() {
-  if (!isConfigured()) return;
+  if (isSaving) return;
   isSaving = true;
   setSyncStatus('saving');
   try {
-    const payload = {
-      d: unitData,
-      checklists: checklistStore,
-      updated_at: new Date().toISOString()
-    };
+    const payload = { d: unitData, checklists: checklistStore, updated_at: new Date().toISOString() };
     const jsonStr = JSON.stringify(payload);
-    // Safe base64 encoding for unicode characters
-    const bytes = new TextEncoder().encode(jsonStr);
-    const binStr = Array.from(bytes, b => String.fromCharCode(b)).join('');
+    const bytes   = new TextEncoder().encode(jsonStr);
+    const binStr  = Array.from(bytes, b => String.fromCharCode(b)).join('');
     const content = btoa(binStr);
+
+    // Get latest SHA before writing
+    if (!lastSHA) lastSHA = await getSHA();
+
     const body = {
-      message: 'QMS data update ' + new Date().toLocaleString(),
-      content,
+      message: 'QMS update ' + new Date().toLocaleTimeString(),
+      content: content,
+      branch: GH_BRANCH
     };
-    if (lastSHA) body.sha = lastSHA;   // required for updates
-    const res = await fetchWithTimeout(ghApiUrl(), {
+    if (lastSHA) body.sha = lastSHA;
+
+    const res = await fetch(API_URL, {
       method: 'PUT',
-      headers: ghHeaders(),
+      headers: {
+        'Authorization': 'Bearer ' + GH_TOKEN,
+        'Accept': 'application/vnd.github+json',
+        'Content-Type': 'application/json'
+      },
       body: JSON.stringify(body)
     });
+
     if (!res.ok) {
       const err = await res.json().catch(() => ({}));
-      throw new Error(err.message || 'PUT ' + res.status);
+      // If SHA conflict, refresh SHA and retry once
+      if (res.status === 409 || res.status === 422) {
+        lastSHA = await getSHA();
+        isSaving = false;
+        return pushToCloud();
+      }
+      throw new Error((err.message || 'Write failed') + ' (HTTP ' + res.status + ')');
     }
-    const json = await res.json();
-    lastSHA = json.content?.sha || lastSHA;
+
+    const j = await res.json();
+    lastSHA = j.content && j.content.sha ? j.content.sha : lastSHA;
+    lastHash = quickHash(unitData);
     saveLocal();
     setSyncStatus('synced');
   } catch(e) {
     console.error('GitHub push failed:', e.message);
     setSyncStatus('error', e.message);
-    showToast('⚠ Sync error: ' + e.message.substring(0, 80));
+    showToast('⚠ Save error: ' + e.message.substring(0, 80));
   }
   isSaving = false;
-}
-
-// ── Pull from GitHub ──
-async function pullFromCloud() {
-  if (!isConfigured()) return null;
-  const res = await fetchWithTimeout(ghApiUrl(), { headers: ghReadHeaders() });
-  if (res.status === 404) return null;   // file not yet created
-  if (!res.ok) throw new Error('GET ' + res.status);
-  const json = await res.json();
-  lastSHA = json.sha;
-  // Decode base64 content
-  const raw = atob(json.content.replace(/\n/g, ''));
-  // Safe decode: handle multi-byte characters
-  const bytes = Uint8Array.from(raw, c => c.charCodeAt(0));
-  const text = new TextDecoder().decode(bytes);
-  return JSON.parse(text);
 }
 
 // ── saveToStorage — called on every mutation ──
 function saveToStorage() {
   saveLocal();
-  if (!isConfigured()) { setSyncStatus('local'); return; }
   clearTimeout(saveTimer);
   saveTimer = setTimeout(() => pushToCloud(), 800);
 }
 
 // ── Load on startup ──
 async function loadFromStorage() {
-  const gotLocal = loadLocal();
-  if (gotLocal) renderAll(0);
-  if (!isConfigured()) { setSyncStatus('local'); return; }
   setSyncStatus('loading');
   try {
     const data = await pullFromCloud();
@@ -2357,160 +2321,85 @@ async function loadFromStorage() {
         if (Array.isArray(unit) && unit.length > 0) unitData[i] = unit;
       });
       if (data.checklists) Object.assign(checklistStore, data.checklists);
+      lastHash = quickHash(unitData);
+      // Get SHA so we can write later
+      getSHA().then(sha => { if (sha) lastSHA = sha; }).catch(() => {});
       saveLocal();
       renderAll(activeUnit || 0);
       setSyncStatus('synced');
     } else {
-      // First run — push local data to GitHub
+      // First run — file doesn't exist yet, push local data
       await pushToCloud();
-      showToast('✓ Dashboard data initialised on GitHub — all devices now share one file');
     }
   } catch(e) {
     setSyncStatus('offline');
     console.error('GitHub load failed:', e.message);
-    showToast('⚠ Cannot reach GitHub: ' + e.message.substring(0, 60));
+    showToast('⚠ Could not load from GitHub: ' + e.message.substring(0, 60));
     scheduleRetry();
   }
 }
 
-// ── Live polling (detect changes from other devices) ──
+// ── Polling (detect changes from other devices) ──
 function startPolling() {
   stopPolling();
-  if (!isConfigured()) return;
   pollTimer = setInterval(async () => {
     if (!navigator.onLine || isSaving) return;
     try {
-      const res = await fetchWithTimeout(ghApiUrl(), { headers: ghReadHeaders() }, 10000);
-      if (!res.ok) return;
-      const json = await res.json();
-      if (json.sha === lastSHA) return;   // no change
-      const raw = atob(json.content.replace(/\n/g, ''));
-  // Safe decode: handle multi-byte characters
-  const bytes = Uint8Array.from(raw, c => c.charCodeAt(0));
-  const text = new TextDecoder().decode(bytes);
-      const data = JSON.parse(text);
-      if (data && data.d && Array.isArray(data.d) && data.d.length >= 3) {
-        data.d.forEach((unit, i) => {
-          if (Array.isArray(unit) && unit.length > 0) unitData[i] = unit;
-        });
-        if (data.checklists) Object.assign(checklistStore, data.checklists);
-        lastSHA = json.sha;
-        saveLocal();
-        renderAll(activeUnit || 0);
-        setSyncStatus('synced');
-        showToast('🔄 Data updated from another device');
-      }
-    } catch(e) { /* silent poll error */ }
+      const data = await pullFromCloud();
+      if (!data || !data.d) return;
+      const newHash = quickHash(data.d);
+      if (newHash === lastHash) return;
+      data.d.forEach((unit, i) => {
+        if (Array.isArray(unit) && unit.length > 0) unitData[i] = unit;
+      });
+      if (data.checklists) Object.assign(checklistStore, data.checklists);
+      lastHash = newHash;
+      saveLocal();
+      renderAll(activeUnit || 0);
+      setSyncStatus('synced');
+      showToast('🔄 Updated from another device');
+    } catch(e) { /* silent */ }
   }, POLL_MS);
 }
 function stopPolling() { if (pollTimer) { clearInterval(pollTimer); pollTimer = null; } }
 
-// ── Retry logic ──
-let _retryTimer = null;
+// ── Retry ──
 function scheduleRetry() {
   clearTimeout(_retryTimer);
-  _retryTimer = setTimeout(() => {
-    if (navigator.onLine) connectToGitHub();
-    else scheduleRetry();
-  }, 30000);
+  _retryTimer = setTimeout(() => { if (navigator.onLine) connectToGitHub(); }, 30000);
 }
 
-// ── Main connect function ──
-
-// ── Fetch with timeout (prevents hanging indefinitely) ──
-function fetchWithTimeout(url, options, ms=12000) {
-  const ctrl = new AbortController();
-  const timer = setTimeout(() => ctrl.abort(), ms);
-  return fetch(url, Object.assign({}, options, { signal: ctrl.signal }))
-    .finally(() => clearTimeout(timer));
-}
-
+// ── Main connect ──
 async function connectToGitHub() {
   setSyncStatus('loading');
-
-  for (let attempt = 1; attempt <= 3; attempt++) {
-    try {
-      // Check repo access
-      const checkUrl = 'https://api.github.com/repos/' + GH_OWNER + '/' + GH_REPO;
-      const check = await fetchWithTimeout(checkUrl, { headers: ghReadHeaders() }, 10000);
-      if (check.status === 401 || check.status === 403) {
-        setSyncStatus('error', 'Auth failed ' + check.status);
-        showToast('⚠ GitHub auth failed (' + check.status + ') — check your access token has repo scope.');
-        return;
-      }
-      if (check.status === 404) {
-        // Try without auth to verify if it's a public repo
-        try {
-          const pub = await fetchWithTimeout(checkUrl, {}, 10000);
-          if (pub.ok) {
-            // Repo exists and is public — token issue
-            setSyncStatus('error', 'Token may lack repo scope');
-            showToast('⚠ Repo exists but token cannot access it. Create a new token with the full "repo" scope checked (not just public_repo).');
-          } else {
-            setSyncStatus('error', 'Repo not found');
-            showToast('⚠ Repo "LEC-QMS-Data" not found under jameskamanda10-star. Double-check the repo name on github.com.');
-          }
-        } catch(e) {
-          setSyncStatus('offline');
-          showToast('⚠ Cannot reach GitHub. Check your internet connection.');
-        }
-        scheduleRetry(); return;
-      }
-
-      // Step 2: Pull data file
-      const data = await pullFromCloud();
-      if (data && data.d && Array.isArray(data.d) && data.d.length >= 3) {
-        data.d.forEach((unit, i) => {
-          if (Array.isArray(unit) && unit.length > 0) unitData[i] = unit;
-        });
-        if (data.checklists) Object.assign(checklistStore, data.checklists);
-        saveLocal();
-        renderAll(activeUnit || 0);
-      } else {
-        // First run — push local data up
-        await pushToCloud();
-      }
-      setSyncStatus('synced');
-      startPolling();
-      return;
-    } catch(e) {
-      console.error('GitHub connect attempt ' + attempt + ':', e.message);
-      if (attempt < 3) { await new Promise(r => setTimeout(r, 2000 * attempt)); continue; }
-      setSyncStatus('offline');
-      showToast('⚠ GitHub error: ' + e.message.substring(0, 80) + ' — retrying in 30s');
-      scheduleRetry();
-    }
+  try {
+    await loadFromStorage();
+    startPolling();
+  } catch(e) {
+    setSyncStatus('offline');
+    scheduleRetry();
   }
 }
 
-// ── Badge click to retry ──
-document.addEventListener('DOMContentLoaded', () => {
-  const badge = document.getElementById('syncBadge');
-  if (badge) badge.addEventListener('click', () => { clearTimeout(_retryTimer); connectToGitHub(); });
-});
-
-// ── Re-sync on tab focus ──
+// ── Reconnect events ──
 document.addEventListener('visibilitychange', () => {
-  if (!document.hidden && isConfigured() && navigator.onLine) {
+  if (!document.hidden && navigator.onLine) {
     pullFromCloud().then(data => {
-      if (!data) return;
-      if (data.d && Array.isArray(data.d) && data.d.length >= 3) {
-        data.d.forEach((unit, i) => {
-          if (Array.isArray(unit) && unit.length > 0) unitData[i] = unit;
-        });
-        if (data.checklists) Object.assign(checklistStore, data.checklists);
-        saveLocal();
-        renderAll(activeUnit || 0);
-        setSyncStatus('synced');
-      }
+      if (!data || !data.d) return;
+      const h = quickHash(data.d);
+      if (h === lastHash) return;
+      data.d.forEach((unit, i) => {
+        if (Array.isArray(unit) && unit.length > 0) unitData[i] = unit;
+      });
+      if (data.checklists) Object.assign(checklistStore, data.checklists);
+      lastHash = h; saveLocal(); renderAll(activeUnit || 0); setSyncStatus('synced');
     }).catch(() => {});
   }
 });
+window.addEventListener('online',  () => connectToGitHub());
+window.addEventListener('offline', () => { stopPolling(); setSyncStatus('offline'); });
 
-window.addEventListener('online',  () => { clearTimeout(_retryTimer); connectToGitHub(); });
-window.addEventListener('offline', () => setSyncStatus('offline'));
-
-// ── Status badge ──
+// ── Badge ──
 function setSyncStatus(state, detail) {
   const badge = document.getElementById('syncBadge');
   if (!badge) return;
@@ -2518,13 +2407,12 @@ function setSyncStatus(state, detail) {
     synced:  { t:'☁ Live — All Devices Synced',    bg:'rgba(46,168,74,0.15)',  fg:'#2ea84a', bd:'rgba(46,168,74,0.3)'  },
     saving:  { t:'↻ Saving…',                       bg:'rgba(245,196,0,0.12)',  fg:'#a07800', bd:'rgba(245,196,0,0.3)'  },
     loading: { t:'↻ Connecting…',                   bg:'rgba(245,196,0,0.12)',  fg:'#a07800', bd:'rgba(245,196,0,0.3)'  },
-    queued:  { t:'⏳ Save Queued — Click to Retry', bg:'rgba(230,126,34,0.15)', fg:'#c06000', bd:'rgba(230,126,34,0.3)' },
-    offline: { t:'⚡ Offline — Click to Reconnect', bg:'rgba(248,81,73,0.12)',  fg:'#c02000', bd:'rgba(248,81,73,0.3)'  },
-    error:   { t:'✕ Sync Error — Click to Retry',  bg:'rgba(200,34,0,0.15)',   fg:'#c02000', bd:'rgba(200,34,0,0.3)'   },
+    offline: { t:'⚡ Offline — Click to Retry',     bg:'rgba(248,81,73,0.12)',  fg:'#c02000', bd:'rgba(248,81,73,0.3)'  },
+    error:   { t:'✕ Error — Click to Retry',        bg:'rgba(200,34,0,0.15)',   fg:'#c02000', bd:'rgba(200,34,0,0.3)'   },
     local:   { t:'💾 Local Only',                   bg:'rgba(74,159,212,0.12)', fg:'#1a6b9a', bd:'rgba(74,159,212,0.3)' },
   };
   const s = map[state] || map.local;
-  badge.textContent    = s.t;
+  badge.textContent   = s.t;
   badge.style.background  = s.bg;
   badge.style.color       = s.fg;
   badge.style.borderColor = s.bd;
@@ -2532,12 +2420,12 @@ function setSyncStatus(state, detail) {
   badge.title = detail ? 'Error: ' + detail : 'Click to reconnect';
 }
 
-// ── Setup stubs (credentials hardcoded) ──
-function openSyncSetup() {}
+// ── Setup stubs ──
+function openSyncSetup()  {}
 function closeSyncSetup() {}
 async function saveSyncSetup() {}
 function clearStorage() {
-  if (!confirm('Reset ALL project data to sample data? This cannot be undone.')) return;
+  if (!confirm('Reset ALL data to sample data? This cannot be undone.')) return;
   stopPolling();
   localStorage.removeItem(LOCAL_KEY);
   localStorage.removeItem(LOCAL_KEY + '_cl');
@@ -2547,9 +2435,6 @@ function clearStorage() {
 // ── INIT ──
 loadLocal();
 renderAll(0);
-// Show diagnostic panel immediately on load and run
-document.getElementById('diagPanel').classList.add('show');
-runDiagnostic().catch(()=>{});
 connectToGitHub();
 
 // ══════════════════════════════════════════════
