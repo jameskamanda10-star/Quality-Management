@@ -2189,11 +2189,18 @@ function isConfigured() { return !!(GH_REPO); }
 function ghApiUrl() {
   return 'https://api.github.com/repos/' + GH_OWNER + '/' + GH_REPO + '/contents/' + GH_FILE;
 }
+// Read headers (minimal — avoids unnecessary CORS preflight)
+function ghReadHeaders() {
+  return {
+    'Authorization': 'Bearer ' + GH_TOKEN,
+    'Accept': 'application/vnd.github+json'
+  };
+}
+// Write headers (full — needed for PUT/POST)
 function ghHeaders() {
   return {
     'Authorization': 'Bearer ' + GH_TOKEN,
     'Accept': 'application/vnd.github+json',
-    'X-GitHub-Api-Version': '2022-11-28',
     'Content-Type': 'application/json'
   };
 }
@@ -2212,16 +2219,14 @@ async function discoverRepo() {
   ];
   for (const name of candidates) {
     try {
-      const r = await fetchWithTimeout(base + name, { headers: h }, 5000);
+      const r = await fetchWithTimeout(base + name, { headers: { 'Authorization': 'Bearer ' + GH_TOKEN, 'Accept': 'application/vnd.github+json' } }, 8000);
       if (r.ok) { GH_REPO = name; console.log('✓ Repo found:', name); return name; }
     } catch(e) { /* try next */ }
   }
 
   // 2. Scan all user repos and find best match
   try {
-    const r = await fetchWithTimeout(
-      'https://api.github.com/user/repos?per_page=100&sort=updated', { headers: h }, 8000
-    );
+    const r = await fetchWithTimeout('https://api.github.com/user/repos?per_page=100&sort=updated', { headers: { 'Authorization': 'Bearer ' + GH_TOKEN, 'Accept': 'application/vnd.github+json' } }, 12000);
     if (r.ok) {
       const repos = await r.json();
       console.log('All repos:', repos.map(r=>r.name).join(', '));
@@ -2316,8 +2321,7 @@ async function pushToCloud() {
 // ── Pull from GitHub ──
 async function pullFromCloud() {
   if (!isConfigured()) return null;
-  const headers = Object.assign({}, ghHeaders(), { 'Cache-Control': 'no-cache' });
-  const res = await fetchWithTimeout(ghApiUrl(), { headers });
+  const res = await fetchWithTimeout(ghApiUrl(), { headers: ghReadHeaders() });
   if (res.status === 404) return null;   // file not yet created
   if (!res.ok) throw new Error('GET ' + res.status);
   const json = await res.json();
@@ -2374,7 +2378,7 @@ function startPolling() {
   pollTimer = setInterval(async () => {
     if (!navigator.onLine || isSaving) return;
     try {
-      const res = await fetch(ghApiUrl(), { headers: Object.assign({}, ghHeaders(), {'Cache-Control':'no-cache'}) });
+      const res = await fetchWithTimeout(ghApiUrl(), { headers: ghReadHeaders() }, 10000);
       if (!res.ok) return;
       const json = await res.json();
       if (json.sha === lastSHA) return;   // no change
@@ -2412,7 +2416,7 @@ function scheduleRetry() {
 // ── Main connect function ──
 
 // ── Fetch with timeout (prevents hanging indefinitely) ──
-function fetchWithTimeout(url, options, ms=8000) {
+function fetchWithTimeout(url, options, ms=12000) {
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), ms);
   return fetch(url, Object.assign({}, options, { signal: ctrl.signal }))
@@ -2426,15 +2430,28 @@ async function connectToGitHub() {
     try {
       // Check repo access
       const checkUrl = 'https://api.github.com/repos/' + GH_OWNER + '/' + GH_REPO;
-      const check = await fetchWithTimeout(checkUrl, { headers: ghHeaders() });
+      const check = await fetchWithTimeout(checkUrl, { headers: ghReadHeaders() }, 10000);
       if (check.status === 401 || check.status === 403) {
         setSyncStatus('error', 'Auth failed ' + check.status);
         showToast('⚠ GitHub auth failed (' + check.status + ') — check your access token has repo scope.');
         return;
       }
       if (check.status === 404) {
-        setSyncStatus('error', 'Repo not found or private');
-        showToast('⚠ Repo "LEC-QMS-Data" not found. It may be Private — go to GitHub → LEC-QMS-Data → Settings → Change visibility → Make public, then retry.');
+        // Try without auth to verify if it's a public repo
+        try {
+          const pub = await fetchWithTimeout(checkUrl, {}, 10000);
+          if (pub.ok) {
+            // Repo exists and is public — token issue
+            setSyncStatus('error', 'Token may lack repo scope');
+            showToast('⚠ Repo exists but token cannot access it. Create a new token with the full "repo" scope checked (not just public_repo).');
+          } else {
+            setSyncStatus('error', 'Repo not found');
+            showToast('⚠ Repo "LEC-QMS-Data" not found under jameskamanda10-star. Double-check the repo name on github.com.');
+          }
+        } catch(e) {
+          setSyncStatus('offline');
+          showToast('⚠ Cannot reach GitHub. Check your internet connection.');
+        }
         scheduleRetry(); return;
       }
 
@@ -3913,7 +3930,7 @@ async function runDiagnostic() {
       headers: { 'Authorization': 'Bearer ' + GH_TOKEN, 'Accept': 'application/vnd.github+json' }
     });
     const j = await r.json();
-    if (r.ok) { set(3,'ok','Token valid — user: ' + j.login + ' ✓'); }
+    if (r.ok) { set(3,'ok','Token valid — GitHub user: ' + j.login + (j.login !== GH_OWNER ? ' ⚠ (expected ' + GH_OWNER + ')' : ' ✓')); }
     else { set(3,'err','Token error ' + r.status + ': ' + (j.message||'')); return; }
   } catch(e) { set(3,'err','Token check failed: ' + e.message); return; }
 
