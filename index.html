@@ -3840,39 +3840,47 @@ async function runDiagnostic() {
     }
   } catch(e) { set(3,'err','Token check failed: ' + e.message); return; }
 
-  // 4. Repo accessible
-  set(4,'spin','Checking repo ' + GH_REPO + '…');
+  // 4. Repo accessible (public repo - no auth needed)
+  set(4,'spin','Checking repo LEC-QMS-Data…');
   try {
+    const ctrl4 = new AbortController();
+    setTimeout(() => ctrl4.abort(), 8000);
     const r = await fetch('https://api.github.com/repos/' + GH_OWNER + '/' + GH_REPO, {
-      headers: { 'Authorization': 'Bearer ' + GH_TOKEN, 'Accept': 'application/vnd.github+json' }
+      signal: ctrl4.signal
     });
     const j = await r.json().catch(()=>({}));
     if (r.ok) {
-      set(4,'ok','Repo found: ' + j.full_name + ' ✓');
+      set(4,'ok','Repo found: ' + j.full_name + ' ✓ (public: ' + !j.private + ')');
     } else {
-      set(4,'err','Repo ' + r.status + ': ' + (j.message||'not found'));
-      return;
+      set(4,'err','Repo HTTP ' + r.status + ': ' + (j.message||'not found'));
+      set(5,'err','Fix step 4 first'); return;
     }
-  } catch(e) { set(4,'err','Repo check failed: ' + e.message); return; }
+  } catch(e) {
+    set(4,'err', e.name === 'AbortError' ? 'Timed out after 8s — network issue' : 'Error: ' + e.message);
+    set(5,'err','Cannot proceed'); return;
+  }
 
-  // 5. Data file / write test
+  // 5. Data file check via raw URL
   set(5,'spin','Checking data file…');
   try {
+    const ctrl5 = new AbortController();
+    setTimeout(() => ctrl5.abort(), 8000);
     const rawUrl = 'https://raw.githubusercontent.com/' + GH_OWNER + '/' + GH_REPO + '/main/' + GH_FILE;
-    const r = await fetch(rawUrl, { cache:'no-store' });
+    const r = await fetch(rawUrl, { cache: 'no-store', signal: ctrl5.signal });
     if (r.ok) {
-      set(5,'ok','✅ Data file exists — sync is ready!');
-      setSyncStatus('synced');
+      set(5,'ok','✅ All checks passed — syncing now!');
       document.getElementById('diagPanel').classList.remove('show');
       connectToGitHub();
     } else if (r.status === 404) {
-      set(5,'ok','No data file yet — will be created on first save ✓');
-      setSyncStatus('synced');
+      set(5,'ok','✅ All checks passed — file will be created on first save');
+      document.getElementById('diagPanel').classList.remove('show');
       connectToGitHub();
     } else {
-      set(5,'err','File check HTTP ' + r.status);
+      set(5,'err','Raw URL HTTP ' + r.status);
     }
-  } catch(e) { set(5,'err','File check failed: ' + e.message); }
+  } catch(e) {
+    set(5,'err', e.name === 'AbortError' ? 'Timed out after 8s' : 'Error: ' + e.message);
+  }
 }
 
 // Run diagnostic automatically when offline/error
