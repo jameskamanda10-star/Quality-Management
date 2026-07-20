@@ -1192,16 +1192,17 @@
 
   /* ── DIAGNOSTICS PANEL ── */
   #diagPanel {
-    position: fixed; bottom: 16px; left: 16px; z-index: 9999;
-    background: #0a0f18; border: 1px solid var(--gold); border-radius: 10px;
-    padding: 14px 18px; max-width: 360px; width: calc(100vw - 32px);
-    box-shadow: 0 8px 32px rgba(0,0,0,0.6); display: none;
+    position: fixed; top: 50%; left: 50%; transform: translate(-50%,-50%);
+    z-index: 9999; background: #0a0f18; border: 2px solid var(--gold);
+    border-radius: 12px; padding: 20px 24px;
+    max-width: 440px; width: calc(100vw - 32px);
+    box-shadow: 0 16px 60px rgba(0,0,0,0.8); display: none;
   }
   #diagPanel.show { display: block; }
   .diag-title { font-family: 'Bebas Neue', sans-serif; font-size: 14px;
     letter-spacing: 2px; color: var(--gold); margin-bottom: 10px; }
-  .diag-row { display: flex; align-items: center; gap: 8px;
-    font-family: 'DM Mono', monospace; font-size: 11px; margin-bottom: 6px; color: #c8d4d8; }
+  .diag-row { display: flex; align-items: center; gap: 10px;
+    font-family: 'DM Mono', monospace; font-size: 12px; margin-bottom: 10px; color: #c8d4d8; word-break: break-all; }
   .diag-dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; background: #444; }
   .diag-dot.ok  { background: #2ea84a; }
   .diag-dot.err { background: #dc2626; }
@@ -1226,6 +1227,7 @@
     <div class="header-right">
       <div class="live-badge"><span class="live-dot"></span> SYSTEM LIVE</div>
       <div id="syncBadge" class="live-badge" onclick="connectToGitHub()" style="cursor:pointer;background:rgba(245,196,0,0.12);color:#a07800;border-color:rgba(245,196,0,0.3)" title="Click to reconnect">↻ Connecting…</div>
+      <button onclick="document.getElementById('diagPanel').classList.add('show');runDiagnostic();" style="background:rgba(74,159,212,0.12);border:1px solid rgba(74,159,212,0.3);color:#1a6b9a;border-radius:5px;padding:4px 10px;font-size:10px;font-family:'DM Mono',monospace;cursor:pointer;letter-spacing:0.5px" title="Run connection diagnostic">🔍 Diagnose</button>
 
       <div class="header-clock" id="clock"></div>
     </div>
@@ -2545,7 +2547,8 @@ function clearStorage() {
 // ── INIT ──
 loadLocal();
 renderAll(0);
-// Run diagnostic first to show status, then connect
+// Show diagnostic panel immediately on load and run
+document.getElementById('diagPanel').classList.add('show');
 runDiagnostic().catch(()=>{});
 connectToGitHub();
 
