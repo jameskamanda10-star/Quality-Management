@@ -2177,7 +2177,7 @@ const POLL_MS     = 15000;
 // ── Hardcoded credentials — auto-connects on every device ──
 const GH_OWNER = 'jameskamanda10-star';
 const GH_TOKEN = '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';
-let   GH_REPO  = '';    // auto-discovered on startup
+let   GH_REPO  = 'LEC-QMS-Data';    // confirmed repo name
 
 let pollTimer = null;
 let lastSHA   = null;
@@ -2422,20 +2422,9 @@ function fetchWithTimeout(url, options, ms=8000) {
 async function connectToGitHub() {
   setSyncStatus('loading');
 
-  // Auto-discover repo if not set
-  if (!GH_REPO) {
-    const found = await discoverRepo();
-    if (!found) {
-      setSyncStatus('error', 'No matching repo found');
-      showToast('⚠ Could not find data repo — check diagnostic panel for your repo list');
-      return;
-    }
-    showToast('✓ Found repo: ' + GH_REPO);
-  }
-
   for (let attempt = 1; attempt <= 3; attempt++) {
     try {
-      // Step 1: Check if repo is reachable
+      // Check repo access
       const checkUrl = 'https://api.github.com/repos/' + GH_OWNER + '/' + GH_REPO;
       const check = await fetchWithTimeout(checkUrl, { headers: ghHeaders() });
       if (check.status === 401 || check.status === 403) {
@@ -2444,9 +2433,9 @@ async function connectToGitHub() {
         return;
       }
       if (check.status === 404) {
-        setSyncStatus('error', 'Repo not found');
-        showToast('⚠ Repo "' + GH_REPO + '" not found. Check the repo name or create it on GitHub.');
-        return;
+        setSyncStatus('error', 'Repo not found or private');
+        showToast('⚠ Repo "LEC-QMS-Data" not found. It may be Private — go to GitHub → LEC-QMS-Data → Settings → Change visibility → Make public, then retry.');
+        scheduleRetry(); return;
       }
 
       // Step 2: Pull data file
