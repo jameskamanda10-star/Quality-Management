@@ -1189,6 +1189,27 @@
     display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:8px;
   }
 
+
+  /* ── DIAGNOSTICS PANEL ── */
+  #diagPanel {
+    position: fixed; bottom: 16px; left: 16px; z-index: 9999;
+    background: #0a0f18; border: 1px solid var(--gold); border-radius: 10px;
+    padding: 14px 18px; max-width: 360px; width: calc(100vw - 32px);
+    box-shadow: 0 8px 32px rgba(0,0,0,0.6); display: none;
+  }
+  #diagPanel.show { display: block; }
+  .diag-title { font-family: 'Bebas Neue', sans-serif; font-size: 14px;
+    letter-spacing: 2px; color: var(--gold); margin-bottom: 10px; }
+  .diag-row { display: flex; align-items: center; gap: 8px;
+    font-family: 'DM Mono', monospace; font-size: 11px; margin-bottom: 6px; color: #c8d4d8; }
+  .diag-dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; background: #444; }
+  .diag-dot.ok  { background: #2ea84a; }
+  .diag-dot.err { background: #dc2626; }
+  .diag-dot.spin { background: #f5c400; animation: spin 1s linear infinite; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  .diag-close { position: absolute; top: 10px; right: 12px;
+    background: none; border: none; color: #556677; cursor: pointer; font-size: 14px; }
+
 </style>
 
 <!-- ── HEADER ── -->
@@ -3797,9 +3818,92 @@ document.getElementById('pdfViewerOverlay').addEventListener('click', e => {
 });
 
 
+
+
+// ── GitHub Connection Diagnostic ──
+async function runDiagnostic() {
+  const panel = document.getElementById('diagPanel');
+  panel.classList.add('show');
+
+  function set(id, state, text) {
+    document.getElementById('d'+id).className = 'diag-dot ' + state;
+    document.getElementById('d'+id+'t').textContent = text;
+  }
+
+  // 1. Internet
+  set(1,'spin','Checking internet…');
+  if (!navigator.onLine) { set(1,'err','No internet connection'); return; }
+  set(1,'ok','Internet: Online ✓');
+
+  // 2. GitHub API reachable
+  set(2,'spin','Reaching api.github.com…');
+  try {
+    const r = await fetch('https://api.github.com/', { headers: { 'Accept': 'application/json' } });
+    set(2, r.ok ? 'ok' : 'err', 'GitHub API: HTTP ' + r.status + (r.ok?' ✓':' ✗'));
+    if (!r.ok) return;
+  } catch(e) { set(2,'err','GitHub API unreachable: ' + e.message); return; }
+
+  // 3. Token valid
+  set(3,'spin','Validating token…');
+  try {
+    const r = await fetch('https://api.github.com/user', {
+      headers: { 'Authorization': 'Bearer ' + GH_TOKEN, 'Accept': 'application/vnd.github+json' }
+    });
+    const j = await r.json();
+    if (r.ok) { set(3,'ok','Token valid — user: ' + j.login + ' ✓'); }
+    else { set(3,'err','Token error ' + r.status + ': ' + (j.message||'')); return; }
+  } catch(e) { set(3,'err','Token check failed: ' + e.message); return; }
+
+  // 4. Repo exists
+  set(4,'spin','Checking repo "' + GH_REPO + '"…');
+  try {
+    const r = await fetch('https://api.github.com/repos/' + GH_OWNER + '/' + GH_REPO, {
+      headers: { 'Authorization': 'Bearer ' + GH_TOKEN, 'Accept': 'application/vnd.github+json' }
+    });
+    const j = await r.json();
+    if (r.ok) { set(4,'ok','Repo found: ' + j.full_name + ' ✓'); }
+    else if (r.status === 404) {
+      set(4,'err','Repo "' + GH_REPO + '" not found (404). Check the name.');
+      // Try to list user repos to help
+      const r2 = await fetch('https://api.github.com/user/repos?per_page=10', {
+        headers: { 'Authorization': 'Bearer ' + GH_TOKEN, 'Accept': 'application/vnd.github+json' }
+      });
+      if (r2.ok) {
+        const repos = await r2.json();
+        const names = repos.map(r=>r.name).join(', ');
+        set(5,'err','Your repos: ' + names);
+      }
+      return;
+    } else { set(4,'err','Repo check: HTTP ' + r.status + ' — ' + (j.message||'')); return; }
+  } catch(e) { set(4,'err','Repo check failed: ' + e.message); return; }
+
+  // 5. Data file
+  set(5,'spin','Checking data file…');
+  try {
+    const r = await fetch('https://api.github.com/repos/' + GH_OWNER + '/' + GH_REPO + '/contents/' + GH_FILE, {
+      headers: { 'Authorization': 'Bearer ' + GH_TOKEN, 'Accept': 'application/vnd.github+json' }
+    });
+    if (r.ok) { set(5,'ok','Data file exists ✓ — sync should work'); }
+    else if (r.status === 404) { set(5,'ok','No data file yet — will be created on first save ✓'); }
+    else { set(5,'err','File check: HTTP ' + r.status); }
+  } catch(e) { set(5,'err','File check failed: ' + e.message); }
+}
+
+// Run diagnostic automatically when offline/error
+const _origSetSyncStatus = setSyncStatus;
+function setSyncStatus(state, detail) {
+  _origSetSyncStatus(state, detail);
+  if (state === 'offline' || state === 'error') {
+    setTimeout(runDiagnostic, 500);
+  }
+}
+
 </script>
 
 <div id="saveToast" class="save-toast"></div>
+
+
+
 
 <!-- ── PROJECT DETAIL MODAL ── -->
 <div id="detailOverlay">
@@ -3818,6 +3922,7 @@ document.getElementById('pdfViewerOverlay').addEventListener('click', e => {
   </div>
 </div>
 
+
 <!-- ── PDF VIEWER MODAL ── -->
 <div id="pdfViewerOverlay">
   <div id="pdfViewerModal">
@@ -3835,6 +3940,17 @@ document.getElementById('pdfViewerOverlay').addEventListener('click', e => {
       </div>
     </div>
   </div>
+</div>
+
+<!-- ── DIAGNOSTIC PANEL ── -->
+<div id="diagPanel">
+  <button class="diag-close" onclick="document.getElementById('diagPanel').classList.remove('show')">✕</button>
+  <div class="diag-title">🔍 GITHUB CONNECTION DIAGNOSTIC</div>
+  <div class="diag-row"><div class="diag-dot" id="d1"></div><span id="d1t">Checking internet…</span></div>
+  <div class="diag-row"><div class="diag-dot" id="d2"></div><span id="d2t">Checking GitHub API…</span></div>
+  <div class="diag-row"><div class="diag-dot" id="d3"></div><span id="d3t">Checking token…</span></div>
+  <div class="diag-row"><div class="diag-dot" id="d4"></div><span id="d4t">Checking repository…</span></div>
+  <div class="diag-row"><div class="diag-dot" id="d5"></div><span id="d5t">Checking data file…</span></div>
 </div>
 
 </body>
