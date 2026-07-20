@@ -2210,7 +2210,11 @@ async function pushToCloud() {
       checklists: checklistStore,
       updated_at: new Date().toISOString()
     };
-    const content = btoa(unescape(encodeURIComponent(JSON.stringify(payload))));
+    const jsonStr = JSON.stringify(payload);
+    // Safe base64 encoding for unicode characters
+    const bytes = new TextEncoder().encode(jsonStr);
+    const binStr = Array.from(bytes, b => String.fromCharCode(b)).join('');
+    const content = btoa(binStr);
     const body = {
       message: 'QMS data update ' + new Date().toLocaleString(),
       content,
@@ -2240,15 +2244,17 @@ async function pushToCloud() {
 // ── Pull from GitHub ──
 async function pullFromCloud() {
   if (!isConfigured()) return null;
-  const res = await fetch(ghApiUrl() + '?t=' + Date.now(), {
-    headers: ghHeaders()
-  });
+  const headers = Object.assign({}, ghHeaders(), { 'Cache-Control': 'no-cache' });
+  const res = await fetch(ghApiUrl(), { headers });
   if (res.status === 404) return null;   // file not yet created
   if (!res.ok) throw new Error('GET ' + res.status);
   const json = await res.json();
   lastSHA = json.sha;
   // Decode base64 content
-  const text = decodeURIComponent(escape(atob(json.content.replace(/\n/g, ''))));
+  const raw = atob(json.content.replace(/\n/g, ''));
+  // Safe decode: handle multi-byte characters
+  const bytes = Uint8Array.from(raw, c => c.charCodeAt(0));
+  const text = new TextDecoder().decode(bytes);
   return JSON.parse(text);
 }
 
@@ -2296,11 +2302,14 @@ function startPolling() {
   pollTimer = setInterval(async () => {
     if (!navigator.onLine || isSaving) return;
     try {
-      const res = await fetch(ghApiUrl() + '?t=' + Date.now(), { headers: ghHeaders() });
+      const res = await fetch(ghApiUrl(), { headers: Object.assign({}, ghHeaders(), {'Cache-Control':'no-cache'}) });
       if (!res.ok) return;
       const json = await res.json();
       if (json.sha === lastSHA) return;   // no change
-      const text = decodeURIComponent(escape(atob(json.content.replace(/\n/g, ''))));
+      const raw = atob(json.content.replace(/\n/g, ''));
+  // Safe decode: handle multi-byte characters
+  const bytes = Uint8Array.from(raw, c => c.charCodeAt(0));
+  const text = new TextDecoder().decode(bytes);
       const data = JSON.parse(text);
       if (data && data.d && Array.isArray(data.d) && data.d.length >= 3) {
         data.d.forEach((unit, i) => {
@@ -2333,6 +2342,21 @@ async function connectToGitHub() {
   setSyncStatus('loading');
   for (let attempt = 1; attempt <= 3; attempt++) {
     try {
+      // Step 1: Check if repo is reachable
+      const checkUrl = 'https://api.github.com/repos/' + GH_OWNER + '/' + GH_REPO;
+      const check = await fetch(checkUrl, { headers: ghHeaders() });
+      if (check.status === 401 || check.status === 403) {
+        setSyncStatus('error', 'Auth failed ' + check.status);
+        showToast('⚠ GitHub auth failed (' + check.status + ') — check your access token has repo scope.');
+        return;
+      }
+      if (check.status === 404) {
+        setSyncStatus('error', 'Repo not found');
+        showToast('⚠ Repo "' + GH_REPO + '" not found. Check the repo name or create it on GitHub.');
+        return;
+      }
+
+      // Step 2: Pull data file
       const data = await pullFromCloud();
       if (data && data.d && Array.isArray(data.d) && data.d.length >= 3) {
         data.d.forEach((unit, i) => {
@@ -2342,15 +2366,17 @@ async function connectToGitHub() {
         saveLocal();
         renderAll(activeUnit || 0);
       } else {
+        // First run — push local data up
         await pushToCloud();
       }
       setSyncStatus('synced');
       startPolling();
       return;
     } catch(e) {
+      console.error('GitHub connect attempt ' + attempt + ':', e.message);
       if (attempt < 3) { await new Promise(r => setTimeout(r, 2000 * attempt)); continue; }
       setSyncStatus('offline');
-      showToast('⚠ Cannot reach GitHub — working offline. Will retry in 30s.');
+      showToast('⚠ GitHub error: ' + e.message.substring(0, 80) + ' — retrying in 30s');
       scheduleRetry();
     }
   }
@@ -3775,6 +3801,7 @@ document.getElementById('pdfViewerOverlay').addEventListener('click', e => {
 
 <div id="saveToast" class="save-toast"></div>
 
+
 <!-- ── PROJECT DETAIL MODAL ── -->
 <div id="detailOverlay">
   <div id="detailModal">
@@ -3810,5 +3837,6 @@ document.getElementById('pdfViewerOverlay').addEventListener('click', e => {
     </div>
   </div>
 </div>
+
 </body>
 </html>
